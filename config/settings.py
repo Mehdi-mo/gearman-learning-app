@@ -160,3 +160,4 @@ PASSWORD_RESET_TIMEOUT = 60 * 60 * 24 * 3
 # --- Production-only security (off while DEBUG is on, so local http:// still works) ---
 if not DEBUG:
     SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
