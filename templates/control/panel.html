@@ -1,0 +1,263 @@
+{% extends 'base.html' %}
+{% block title %}Admin — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .adm-head { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:1rem; padding:2rem 0 1.5rem; border-bottom:1px solid var(--border); margin-bottom:2rem; }
+    .adm-head h1 { font-family:'Playfair Display',serif; font-size:2.2rem; }
+    .adm-head h1 span { color:var(--gold); }
+    .adm-head small { color:var(--muted); font-weight:300; }
+
+    .tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:1rem; margin-bottom:2.5rem; }
+    .tile { background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:1.1rem 1.2rem; }
+    .tile b { display:block; font-family:'Playfair Display',serif; font-size:1.9rem; line-height:1; margin-bottom:0.35rem; }
+    .tile span { font-size:0.72rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); }
+    .t-good b { color:#4caf50; } .t-wait b { color:var(--gold); } .t-plain b { color:var(--text); }
+
+    .card { background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:1.5rem 1.7rem; margin-bottom:1.5rem; }
+    .card h2 { font-family:'Playfair Display',serif; font-size:1.3rem; margin-bottom:1.1rem; }
+    .card h2 small { font-family:'Source Sans 3',sans-serif; font-size:0.85rem; color:var(--muted); font-weight:300; margin-left:0.5rem; }
+
+    .runrow { display:flex; gap:0.7rem; flex-wrap:wrap; align-items:center; margin-bottom:0.9rem; }
+    .runrow:last-child { margin-bottom:0; }
+    .runrow label { font-size:0.85rem; color:var(--muted); }
+    input[type=number], input[type=time], select { background:var(--bg3); border:1px solid var(--border2); color:var(--text); padding:0.4rem 0.6rem; border-radius:2px; font-family:inherit; font-size:0.9rem; }
+    input[type=number] { width:80px; }
+    .btn-sm { background:var(--gold); color:#fff; border:none; padding:0.45rem 1rem; border-radius:2px; font-size:0.82rem; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; cursor:pointer; font-family:inherit; }
+    .btn-sm:hover { background:var(--gold-light); }
+    .btn-ghost-sm { background:none; border:1px solid var(--border2); color:var(--text2); padding:0.45rem 1rem; border-radius:2px; font-size:0.82rem; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; cursor:pointer; font-family:inherit; }
+    .btn-ghost-sm:hover { border-color:var(--gold); color:var(--gold); }
+    .btn-danger { background:none; border:1px solid #c75c5c; color:#c75c5c; padding:0.45rem 1rem; border-radius:2px; font-size:0.82rem; font-weight:600; text-transform:uppercase; cursor:pointer; font-family:inherit; }
+    .btn-danger:hover { background:#c75c5c; color:#fff; }
+
+    .live { border-left:3px solid var(--gold); }
+    .bar { height:7px; background:var(--bg3); border-radius:4px; overflow:hidden; margin:0.8rem 0 0.6rem; }
+    .bar i { display:block; height:100%; background:var(--gold); width:0; transition:width 0.4s; }
+    .live-meta { font-size:0.85rem; color:var(--muted); font-family:ui-monospace,monospace; }
+    .logbox { background:var(--bg); border:1px solid var(--border); border-radius:3px; padding:0.7rem 0.9rem; margin-top:0.9rem; max-height:190px; overflow:auto; font-family:ui-monospace,monospace; font-size:0.78rem; color:var(--text2); white-space:pre-wrap; line-height:1.5; }
+
+    table.adm { width:100%; border-collapse:collapse; font-size:0.9rem; }
+    table.adm th { text-align:left; font-size:0.72rem; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); font-weight:400; padding:0.5rem 0.4rem; border-bottom:1px solid var(--border2); }
+    table.adm td { padding:0.6rem 0.4rem; border-bottom:1px solid var(--border); vertical-align:middle; }
+    table.adm tr:last-child td { border-bottom:none; }
+    .ttl { max-width:380px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .pill { font-size:0.7rem; padding:0.15rem 0.5rem; border-radius:2px; border:1px solid; letter-spacing:0.5px; }
+    .p-done { color:#4caf50; border-color:#4caf50; }
+    .p-wait { color:var(--gold); border-color:var(--gold); }
+
+    .tabs { display:flex; gap:1.2rem; margin-bottom:1.2rem; border-bottom:1px solid var(--border); }
+    .tabs a { color:var(--muted); text-decoration:none; font-size:0.95rem; padding:0.5rem 0; border-bottom:2px solid transparent; }
+    .tabs a.on { color:var(--gold); border-bottom-color:var(--gold); }
+    .filters { display:flex; gap:0.6rem; margin-bottom:1rem; flex-wrap:wrap; }
+    .filters a { font-size:0.82rem; color:var(--muted); text-decoration:none; border:1px solid var(--border2); padding:0.25rem 0.7rem; border-radius:2px; }
+    .filters a.on { color:var(--gold); border-color:var(--gold); }
+
+    .sched-grid { display:grid; grid-template-columns:1.4fr auto auto auto; gap:0.8rem 1rem; align-items:center; }
+    .sched-grid > div { font-size:0.9rem; }
+    .sched-head { font-size:0.72rem !important; letter-spacing:1.5px; text-transform:uppercase; color:var(--muted); }
+    .hist { font-size:0.85rem; color:var(--muted); }
+    .hist li { padding:0.4rem 0; border-bottom:1px solid var(--border); list-style:none; display:flex; justify-content:space-between; gap:1rem; }
+    .hist li:last-child { border-bottom:none; }
+    .pager { display:flex; gap:0.6rem; align-items:center; margin-top:1rem; font-size:0.85rem; color:var(--muted); }
+    .pager a { color:var(--gold); text-decoration:none; }
+    @media (max-width:640px){ .sched-grid { grid-template-columns:1fr 1fr; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="adm-head">
+    <h1>Admin — <span>Inhalte</span></h1>
+    <small>{{ counts.users_total }} Nutzer · {{ counts.users_premium }} Premium ({{ counts.users_premium_paying }} zahlend · {{ counts.users_premium_free }} Gratis) · {{ counts.users_staff }} Team · {{ counts.cache_entries }} Übersetzungen gespeichert</small>
+</div>
+
+<div class="tiles">
+    <div class="tile t-plain"><b>{{ counts.articles_total }}</b><span>Artikel gesamt</span></div>
+    <div class="tile t-good"><b>{{ counts.articles_done }}</b><span>Fertig</span></div>
+    <div class="tile t-wait"><b>{{ counts.articles_waiting }}</b><span>Wartend</span></div>
+    <div class="tile t-plain"><b>{{ counts.conversations }}</b><span>Gespräche</span></div>
+    <div class="tile t-plain"><b>{{ counts.prep_exercises }}</b><span>Präp.-Übungen</span></div>
+    <div class="tile t-plain"><b>{{ counts.nvv }}</b><span>Nomen-Verb</span></div>
+    <div class="tile t-plain"><b>{{ counts.nvv_exercises }}</b><span>NV-Übungen</span></div>
+</div>
+
+<div class="card live" id="live-card" style="{% if not running %}display:none{% endif %}">
+    <h2>Läuft gerade <small id="live-job">{{ running.get_job_display|default:'' }}</small></h2>
+    <div class="bar"><i id="live-bar" style="width:{{ running.percent|default:0 }}%"></i></div>
+    <div class="live-meta"><span id="live-meta">{{ running.done_count|default:0 }} / {{ running.total|default:0 }}</span> · <span id="live-current">{{ running.current|default:'' }}</span></div>
+    <div class="logbox" id="live-log">{{ running.log|default:'' }}</div>
+    <form method="post" action="{% url 'control_cancel' %}" style="margin-top:0.9rem">{% csrf_token %}
+        <button class="btn-danger" type="submit">Stoppen</button>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Jetzt ausführen</h2>
+
+    <form method="post" action="{% url 'control_run' %}" class="runrow">{% csrf_token %}
+        <input type="hidden" name="job" value="fetch_articles">
+        <label>Neue Artikel holen — Seiten</label>
+        <input type="number" name="pages" value="1" min="1" max="5">
+        <button class="btn-sm" type="submit">Holen</button>
+        <span style="font-size:0.82rem;color:var(--muted)">≈ 40 Artikel pro Seite, Duplikate werden übersprungen</span>
+    </form>
+
+    <form method="post" action="{% url 'control_run' %}" class="runrow">{% csrf_token %}
+        <input type="hidden" name="job" value="process_articles">
+        <label>Artikel verarbeiten — Anzahl</label>
+        <input type="number" name="count" value="10" min="1" max="200">
+        <button class="btn-sm" type="submit">Verarbeiten</button>
+        <span style="font-size:0.82rem;color:var(--muted)">≈ 45 Sek. pro Artikel ({{ counts.articles_waiting }} warten)</span>
+    </form>
+
+    <form method="post" action="{% url 'control_run' %}" class="runrow">{% csrf_token %}
+        <input type="hidden" name="job" value="generate_conversations">
+        <label>Gespräche erstellen</label>
+        <select name="level">
+            <option value="all">Alle Niveaus</option>
+            <option value="a1_a2">A1/A2</option>
+            <option value="b1_b2">B1/B2</option>
+            <option value="c1">C1</option>
+        </select>
+        <input type="number" name="count" value="1" min="1" max="20">
+        <button class="btn-sm" type="submit">Erstellen</button>
+    </form>
+
+    <form method="post" action="{% url 'control_run' %}" class="runrow">{% csrf_token %}
+        <input type="hidden" name="job" value="generate_grammar">
+        <label>Grammatik erstellen — Anzahl je Typ</label>
+        <input type="number" name="count" value="10" min="1" max="60">
+        <button class="btn-sm" type="submit">Erstellen</button>
+        <span style="font-size:0.82rem;color:var(--muted)">Präpositionen, Nomen-Verb und deren Übungen</span>
+    </form>
+</div>
+
+<div class="card">
+    <h2>Zeitplan <small>läuft automatisch — auch per Windows-Aufgabe</small></h2>
+    <form method="post" action="{% url 'control_schedule' %}">{% csrf_token %}
+        <div class="sched-grid">
+            <div class="sched-head">Aufgabe</div>
+            <div class="sched-head">Aktiv</div>
+            <div class="sched-head">Uhrzeit</div>
+            <div class="sched-head">Anzahl</div>
+            {% for s in schedules %}
+            <div>{{ s.get_job_display }}{% if s.last_run_on %}<br><span style="font-size:0.78rem;color:var(--muted)">zuletzt {{ s.last_run_on|date:"d.m.Y" }}</span>{% endif %}</div>
+            <div><input type="checkbox" name="sched_{{ s.job }}_enabled" {% if s.enabled %}checked{% endif %}></div>
+            <div><input type="time" name="sched_{{ s.job }}_time" value="{{ s.run_at|time:'H:i' }}"></div>
+            <div><input type="number" name="sched_{{ s.job }}_count" value="{{ s.count }}" min="1" max="200"></div>
+            {% endfor %}
+        </div>
+        <button class="btn-sm" type="submit" style="margin-top:1.2rem">Zeitplan speichern</button>
+    </form>
+</div>
+
+<div class="card">
+    <div class="tabs">
+        <a href="?tab=articles" class="{% if tab != 'conversations' %}on{% endif %}">Artikel</a>
+        <a href="?tab=conversations" class="{% if tab == 'conversations' %}on{% endif %}">Gespräche</a>
+    </div>
+
+    {% if tab == 'conversations' %}
+    <div class="filters">
+        <a href="?tab=conversations&level=all" class="{% if level == 'all' %}on{% endif %}">Alle</a>
+        <a href="?tab=conversations&level=a1_a2" class="{% if level == 'a1_a2' %}on{% endif %}">A1/A2</a>
+        <a href="?tab=conversations&level=b1_b2" class="{% if level == 'b1_b2' %}on{% endif %}">B1/B2</a>
+        <a href="?tab=conversations&level=c1" class="{% if level == 'c1' %}on{% endif %}">C1</a>
+    </div>
+    <form method="post" action="{% url 'control_delete' %}">{% csrf_token %}
+        <input type="hidden" name="kind" value="conversations">
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <table class="adm">
+            <tr><th style="width:28px"></th><th>Thema</th><th style="width:80px">Niveau</th><th style="width:100px">Erstellt</th></tr>
+            {% for c in rows %}
+            <tr>
+                <td><input type="checkbox" name="ids" value="{{ c.pk }}"></td>
+                <td class="ttl"><a href="{% url 'conversation_detail' c.pk %}" style="color:var(--text);text-decoration:none">{{ c.topic }}</a></td>
+                <td><span class="pill p-done">{{ c.get_level_display }}</span></td>
+                <td style="color:var(--muted)">{{ c.created_at|date:"d.m.Y" }}</td>
+            </tr>
+            {% empty %}<tr><td colspan="4" style="color:var(--muted);padding:1.5rem 0">Keine Gespräche.</td></tr>{% endfor %}
+        </table>
+        {% if rows %}<button class="btn-danger" type="submit" style="margin-top:1rem">Ausgewählte löschen</button>{% endif %}
+    </form>
+
+    {% else %}
+    <div class="filters">
+        <a href="?tab=articles&status=all" class="{% if status == 'all' %}on{% endif %}">Alle</a>
+        <a href="?tab=articles&status=done" class="{% if status == 'done' %}on{% endif %}">Fertig</a>
+        <a href="?tab=articles&status=waiting" class="{% if status == 'waiting' %}on{% endif %}">Wartend</a>
+    </div>
+    <form method="post" action="{% url 'control_delete' %}">{% csrf_token %}
+        <input type="hidden" name="kind" value="articles">
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <table class="adm">
+            <tr><th style="width:28px"></th><th>Titel</th><th style="width:90px">Status</th><th style="width:100px">Datum</th><th style="width:90px">Aktion</th></tr>
+            {% for a in rows %}
+            <tr>
+                <td><input type="checkbox" name="ids" value="{{ a.pk }}"></td>
+                <td class="ttl">{% if a.is_processed %}<a href="{% url 'article_detail' a.pk %}" style="color:var(--text);text-decoration:none">{{ a.title }}</a>{% else %}{{ a.title }}{% endif %}</td>
+                <td><span class="pill {% if a.is_processed %}p-done{% else %}p-wait{% endif %}">{% if a.is_processed %}fertig{% else %}wartend{% endif %}</span></td>
+                <td style="color:var(--muted)">{{ a.published_at|date:"d.m.Y" }}</td>
+                <td>{% if not a.is_processed %}<button class="btn-ghost-sm" type="submit" formaction="{% url 'control_process_one' %}" name="pk" value="{{ a.pk }}">Jetzt</button>{% endif %}</td>
+            </tr>
+            {% empty %}<tr><td colspan="5" style="color:var(--muted);padding:1.5rem 0">Keine Artikel.</td></tr>{% endfor %}
+        </table>
+        {% if rows %}<button class="btn-danger" type="submit" style="margin-top:1rem">Ausgewählte löschen</button>{% endif %}
+    </form>
+    {% endif %}
+
+    {% if page_count > 1 %}
+    <div class="pager">
+        {% if has_prev %}<a href="?tab={{ tab }}&status={{ status }}&level={{ level }}&page={{ page|add:'-1' }}">← Zurück</a>{% endif %}
+        <span>Seite {{ page }} von {{ page_count }} · {{ row_total }} Einträge</span>
+        {% if has_next %}<a href="?tab={{ tab }}&status={{ status }}&level={{ level }}&page={{ page|add:'1' }}">Weiter →</a>{% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Verlauf</h2>
+    <ul class="hist">
+        {% for h in history %}
+        <li>
+            <span>{{ h.get_job_display }} · {{ h.get_status_display }}{% if h.total %} · {{ h.done_count }}/{{ h.total }}{% endif %}</span>
+            <span>{{ h.created_at|date:"d.m. H:i" }} · {{ h.triggered_by }}</span>
+        </li>
+        {% empty %}<li><span>Noch nichts gelaufen.</span></li>{% endfor %}
+    </ul>
+    <form method="post" action="{% url 'control_clear_cache' %}" style="margin-top:1.2rem">{% csrf_token %}
+        <button class="btn-ghost-sm" type="submit" onclick="return confirm('Alle {{ counts.cache_entries }} gespeicherten Übersetzungen löschen? Sie werden danach neu von der KI geholt.')">Übersetzungs-Cache leeren ({{ counts.cache_entries }})</button>
+    </form>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let wasRunning = {% if running %}true{% else %}false{% endif %};
+
+async function poll() {
+    try {
+        const r = await fetch('{% url "control_status" %}');
+        const d = await r.json();
+        const card = document.getElementById('live-card');
+
+        if (d.running) {
+            wasRunning = true;
+            card.style.display = '';
+            document.getElementById('live-job').textContent     = d.job;
+            document.getElementById('live-bar').style.width     = d.percent + '%';
+            document.getElementById('live-meta').textContent    = d.done + ' / ' + d.total;
+            document.getElementById('live-current').textContent = d.current || '';
+            const log = document.getElementById('live-log');
+            if (log.textContent !== d.log) { log.textContent = d.log; log.scrollTop = log.scrollHeight; }
+        } else if (wasRunning) {
+            // Job just finished — reload so every counter and table is current.
+            window.location.reload();
+        } else {
+            card.style.display = 'none';
+        }
+    } catch (e) { /* keep polling */ }
+}
+setInterval(poll, 3000);
+poll();
+</script>
+{% endblock %}

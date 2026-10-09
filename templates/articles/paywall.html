@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}Premium — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .lock-wrap { max-width: 760px; margin: 3rem auto 0; text-align: center; }
+    .lock-icon { font-size: 3rem; margin-bottom: 1.2rem; }
+    .lock-wrap h1 { font-family: 'Playfair Display', serif; font-size: 2.4rem; line-height: 1.2; margin-bottom: 1rem; }
+    .lock-wrap h1 span { color: var(--gold); }
+    .lock-sub { color: var(--muted); font-weight: 300; font-size: 1.1rem; line-height: 1.7; max-width: 540px; margin: 0 auto 2.5rem; }
+
+    .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; text-align: left; margin-bottom: 2.5rem; }
+    .plan { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 2rem; }
+    .plan.premium { border-color: var(--gold); position: relative; }
+    .plan-name { font-size: 0.78rem; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 1.2rem; }
+    .plan.premium .plan-name { color: var(--gold); }
+    .plan ul { list-style: none; }
+    .plan li { padding: 0.5rem 0 0.5rem 1.6rem; position: relative; color: var(--text2); font-weight: 300; line-height: 1.5; }
+    .plan li::before { content: '✓'; position: absolute; left: 0; color: var(--gold); }
+    .plan li.no { color: var(--muted); }
+    .plan li.no::before { content: '✕'; color: var(--muted); }
+
+    .lock-actions { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn-ghost { border: 1px solid var(--border2); color: var(--text2); padding: 0.5rem 1.2rem; border-radius: 2px; font-size: 0.9rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; transition: border-color 0.2s, color 0.2s; }
+    .btn-ghost:hover { border-color: var(--gold); color: var(--gold); }
+    .lock-note { margin-top: 2.5rem; color: var(--muted); font-size: 0.9rem; font-weight: 300; }
+
+    @media (max-width: 640px) { .plans { grid-template-columns: 1fr; } .lock-wrap h1 { font-size: 1.8rem; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="lock-wrap">
+    <div class="lock-icon">🔒</div>
+    <h1>{{ paywall_title }}</h1>
+    <p class="lock-sub">{{ paywall_subtitle }}</p>
+
+    <div class="plans">
+        <div class="plan">
+            <div class="plan-name">Kostenlos — dein Tarif</div>
+            <ul>
+                <li>{{ per_day }} Artikel oder Gespräch pro Tag</li>
+                <li>Alle drei Niveaus (A1–C1)</li>
+                <li>Wörter speichern &amp; Karteikarten</li>
+                <li>Grammatik und Übungen ohne Limit</li>
+                <li class="no">Unbegrenztes Lesen</li>
+            </ul>
+        </div>
+        <div class="plan premium">
+            <div class="plan-name">⭐ Premium</div>
+            <ul>
+                <li><b>Unbegrenzt</b> Artikel und Gespräche</li>
+                <li>Alle drei Niveaus (A1–C1)</li>
+                <li>Wörter speichern &amp; Karteikarten</li>
+                <li>Grammatik und Übungen ohne Limit</li>
+                <li>Unbegrenzte Übersetzungen</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="lock-actions">
+        <a href="{% url 'upgrade' %}" class="btn">Premium freischalten</a>
+        <a href="{% url 'home' %}" class="btn-ghost">Zurück zur Startseite</a>
+    </div>
+
+    <p class="lock-note">
+        Schon freigeschaltete Inhalte kannst du jederzeit weiterlesen — auch morgen.<br>
+        Dein Tageslimit setzt sich um Mitternacht zurück.
+    </p>
+</div>
+{% endblock %}

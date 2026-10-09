@@ -1,0 +1,134 @@
+{% extends 'base.html' %}
+{% block title %}Gespeicherte Wörter — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-title { font-family: 'Playfair Display', serif; font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .page-subtitle { color: var(--muted); margin-bottom: 3rem; font-size: 1.05rem; font-weight: 300; }
+
+    .filter-tabs { display: flex; gap: 0.5rem; margin-bottom: 2rem; }
+    .filter-tab { padding: 0.5rem 1.2rem; border: 1px solid var(--border2); background: transparent; color: var(--muted); border-radius: 2px; cursor: pointer; font-size: 0.95rem; letter-spacing: 1px; text-transform: uppercase; transition: all 0.2s; font-family: 'Source Sans 3', sans-serif; }
+    .filter-tab.active { background: var(--gold); border-color: var(--gold); color: #fff; font-weight: 600; }
+
+    .words-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.2rem; }
+
+    .word-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.4rem; position: relative; transition: border-color 0.2s; }
+    .word-card:hover { border-color: var(--gold); }
+    .word-card.verb-card-type { border-left: 3px solid var(--gold); }
+
+    .word-badge { font-size: 0.7rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .word-main { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: var(--gold); margin-bottom: 0.3rem; }
+    .word-meaning { color: var(--text); font-size: 1rem; margin-bottom: 0.8rem; }
+    .word-example { color: var(--muted); font-size: 0.95rem; font-style: italic; border-left: 2px solid var(--border2); padding-left: 0.8rem; line-height: 1.5; }
+    .word-example-translation { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; font-style: normal; opacity: 0.7; }
+    .word-date { font-size: 0.8rem; color: var(--muted); margin-top: 0.8rem; opacity: 0.6; }
+
+    .remove-btn { position: absolute; top: 0.8rem; right: 0.8rem; background: transparent; border: 1px solid var(--border2); color: var(--muted); width: 26px; height: 26px; border-radius: 50%; cursor: pointer; font-size: 0.8rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+    .remove-btn:hover { border-color: #e05c5c; color: #e05c5c; }
+
+    .empty-state { text-align: center; padding: 4rem; color: var(--muted); }
+    .empty-state h2 { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 1rem; }
+    .empty-state a { color: var(--gold); text-decoration: none; }
+
+    .stats { display: flex; gap: 2rem; margin-bottom: 2rem; }
+    .stat { text-align: center; }
+    .stat-number { font-family: 'Playfair Display', serif; font-size: 2rem; color: var(--gold); }
+    .stat-label { font-size: 0.85rem; color: var(--muted); }
+</style>
+{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Gespeicherte Wörter</h1>
+<p class="page-subtitle">Deine persönliche Vokabelliste zum Üben.</p>
+
+{% if due_count > 0 %}
+<a href="{% url 'flashcards' %}" style="display:inline-flex;align-items:center;gap:0.6rem;background:var(--gold);color:#fff;padding:0.7rem 1.4rem;border-radius:4px;text-decoration:none;font-size:1rem;font-weight:600;margin-bottom:2rem;">
+    🃏 {{ due_count }} Karten üben
+</a>
+{% else %}
+<a href="{% url 'flashcards' %}" style="display:inline-flex;align-items:center;gap:0.6rem;background:transparent;color:var(--gold);border:1px solid var(--gold);padding:0.7rem 1.4rem;border-radius:4px;text-decoration:none;font-size:1rem;margin-bottom:2rem;">
+    🃏 Karteikarten
+</a>
+{% endif %}
+
+{% if words %}
+<div class="stats">
+    <div class="stat">
+        <div class="stat-number">{{ words.count }}</div>
+        <div class="stat-label">Gesamt</div>
+    </div>
+    <div class="stat">
+        <div class="stat-number">{{ words|length }}</div>
+        <div class="stat-label">Wörter & Verben</div>
+    </div>
+</div>
+
+<div class="filter-tabs">
+    <button class="filter-tab active" onclick="filterWords('all', this)">Alle</button>
+    <button class="filter-tab" onclick="filterWords('word', this)">Wörter</button>
+    <button class="filter-tab" onclick="filterWords('verb', this)">Verben</button>
+</div>
+
+<div class="words-grid" id="words-grid">
+    {% for w in words %}
+    <div class="word-card {% if w.word_type == 'verb' %}verb-card-type{% endif %}" data-type="{{ w.word_type }}" id="card-{{ w.pk }}">
+        <button class="remove-btn" onclick="removeWord('{{ w.word|escapejs }}', {{ w.pk }})" title="Entfernen">✕</button>
+        <div class="word-badge">{% if w.word_type == 'verb' %}⚡ Verb{% else %}📚 Wort{% endif %}</div>
+        <div class="word-main">{{ w.word }}</div>
+        <div class="word-meaning">{{ w.translation }}</div>
+        {% if w.example %}
+        <div class="word-example">
+            {{ w.example }}
+            {% if w.example_translation %}
+            <div class="word-example-translation">{{ w.example_translation }}</div>
+            {% endif %}
+        </div>
+        {% endif %}
+        <div class="word-date">Gespeichert am {{ w.saved_at|date:"d.m.Y" }}</div>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<div class="empty-state">
+    <h2>Noch keine Wörter gespeichert</h2>
+    <p>Lies einen <a href="{% url 'article_list' %}">Artikel</a> und speichere interessante Wörter!</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function filterWords(type, btn) {
+        document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.word-card').forEach(card => {
+            if (type === 'all' || card.dataset.type === type) {
+                card.style.display = 'block';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+    }
+
+    function removeWord(word, pk) {
+        fetch('/accounts/unsave-word/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify({ word })
+        }).then(() => {
+            const card = document.getElementById('card-' + pk);
+            card.style.opacity = '0';
+            card.style.transform = 'scale(0.95)';
+            card.style.transition = 'all 0.3s';
+            setTimeout(() => card.remove(), 300);
+        });
+    }
+
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+    }
+</script>
+{% endblock %}

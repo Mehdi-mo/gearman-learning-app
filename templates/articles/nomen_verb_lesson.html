@@ -1,0 +1,261 @@
+{% extends 'base.html' %}
+{% block title %}Nomen-Verb-Verbindungen — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-hero { padding: 3rem 0 2rem; border-bottom: 1px solid var(--border2); margin-bottom: 2.5rem; }
+    .page-hero h1 { font-family: 'Playfair Display', serif; font-size: 2.8rem; margin-bottom: 0.5rem; }
+    .page-hero p { color: var(--muted); font-size: 1.05rem; max-width: 650px; }
+
+    .section-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin: 2rem 0 0.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border2); }
+    .section-subtitle { color: var(--muted); margin-bottom: 1.5rem; font-size: 1rem; }
+
+    .count-badge { background: var(--bg3); border: 1px solid var(--border2); border-radius: 20px; padding: 0.3rem 0.8rem; font-size: 0.85rem; color: var(--muted); display: inline-block; margin-left: 0.5rem; }
+
+    /* Alphabet nav */
+    .alpha-nav { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 2rem; }
+    .alpha-btn { padding: 0.3rem 0.7rem; border: 1px solid var(--border2); background: transparent; color: var(--muted); border-radius: 2px; cursor: pointer; font-size: 0.9rem; font-family: 'Playfair Display', serif; transition: all 0.2s; }
+    .alpha-btn:hover { border-color: var(--gold); color: var(--gold); }
+    .alpha-btn.active { background: var(--gold); border-color: var(--gold); color: #fff; }
+
+    /* NVV grid */
+    .nvv-group { margin-bottom: 2rem; display: none; }
+    .nvv-group.active { display: block; }
+    .nvv-group-title { font-family: 'Playfair Display', serif; font-size: 1.5rem; color: var(--gold); margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border2); }
+    .nvv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; }
+    .nvv-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.3rem; transition: border-color 0.2s; cursor: pointer; }
+    .nvv-card:hover { border-color: var(--gold); }
+    .nvv-collocation { font-family: 'Playfair Display', serif; font-size: 1.2rem; color: var(--gold); margin-bottom: 0.3rem; }
+    .nvv-meaning { color: var(--text); font-size: 0.95rem; margin-bottom: 0.8rem; }
+    .nvv-examples { display: none; flex-direction: column; gap: 0.5rem; margin-top: 0.8rem; border-top: 1px solid var(--border); padding-top: 0.8rem; }
+    .nvv-examples.open { display: flex; }
+    .nvv-example { background: var(--bg3); border-radius: 3px; padding: 0.6rem 0.8rem; }
+    .nvv-example-de { color: var(--text2); font-size: 0.9rem; }
+    .nvv-example-tr { color: var(--muted); font-size: 0.8rem; font-style: italic; margin-top: 0.2rem; }
+    .nvv-toggle { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; }
+
+    /* Exercises */
+    .exercises-section { margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border2); }
+    .exercise-list { max-width: 750px; }
+    .exercise-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1.3rem 1.5rem; margin-bottom: 1rem; }
+    .ex-number { font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .ex-collocation-hint { font-size: 0.85rem; color: var(--gold); margin-bottom: 0.6rem; font-style: italic; }
+    .ex-sentence { font-size: 1.1rem; color: var(--text); margin-bottom: 1rem; line-height: 1.5; }
+    .ex-options { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem; }
+    .ex-option { padding: 0.4rem 1rem; border: 1px solid var(--border2); border-radius: 20px; cursor: pointer; font-size: 0.95rem; color: var(--muted); background: transparent; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; }
+    .ex-option:hover { border-color: var(--gold); color: var(--gold); }
+    .ex-option.correct { border-color: #4caf50; color: #4caf50; background: rgba(76,175,80,0.1); }
+    .ex-option.wrong   { border-color: #f44336; color: #f44336; background: rgba(244,67,54,0.1); }
+    .ex-feedback { font-size: 0.9rem; color: var(--muted); margin-top: 0.5rem; display: none; }
+    .ex-feedback.show { display: block; }
+
+    /* Pagination */
+    .pagination { display: flex; align-items: center; gap: 1rem; margin-top: 1.5rem; }
+    .page-btn { padding: 0.5rem 1.2rem; border: 1px solid var(--border2); background: transparent; color: var(--muted); border-radius: 2px; cursor: pointer; font-size: 0.95rem; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; }
+    .page-btn:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+    .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .page-info { color: var(--muted); font-size: 0.9rem; }
+
+    .exercise-score { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.2rem 1.5rem; margin-top: 1.5rem; display: none; max-width: 300px; }
+    .exercise-score.show { display: block; }
+    .score-big { font-family: 'Playfair Display', serif; font-size: 2.5rem; color: var(--gold); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-hero">
+    <h1>Nomen-Verb-Verbindungen</h1>
+    <p>Feste Verbindungen aus Nomen und Verb — unverzichtbar für natürliches Deutsch. Klicke auf eine Karte um die Beispiele zu sehen.</p>
+</div>
+
+<h2 class="section-title">
+    Alle Verbindungen
+    <span class="count-badge">{{ collocations|length }} gesamt</span>
+</h2>
+<p class="section-subtitle">Wähle einen Buchstaben um die Einträge zu filtern.</p>
+
+{% if collocations %}
+
+<!-- Alphabet navigation -->
+<div class="alpha-nav" id="alpha-nav"></div>
+
+<!-- NVV groups by letter -->
+<div id="nvv-container">
+    {% regroup collocations by sort_letter as letter_groups %}
+    {% for group in letter_groups %}
+    <div class="nvv-group" data-letter="{{ group.grouper|upper }}">
+        <div class="nvv-group-title">{{ group.grouper|upper }}</div>
+        <div class="nvv-grid">
+            {% for nvv in group.list %}
+            <div class="nvv-card" onclick="toggleExamples(this)">
+                <div class="nvv-collocation">{{ nvv.collocation }}</div>
+                <div class="nvv-meaning">{{ nvv.meaning }}</div>
+                <div class="nvv-toggle">▼ Beispiele anzeigen</div>
+                {% if nvv.examples %}
+                <div class="nvv-examples">
+                    {% for ex in nvv.examples %}
+                    <div class="nvv-example">
+                        <div class="nvv-example-de">{{ ex.german }}</div>
+                        <div class="nvv-example-tr">{{ ex.translation }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<p style="color:var(--muted);">Noch keine Einträge. Führe <code>python manage.py generate_grammar_content</code> aus.</p>
+{% endif %}
+
+<!-- Exercises -->
+<div class="exercises-section">
+    <h2 class="section-title" style="border-top:none;padding-top:0;">📝 Lückentext-Übungen</h2>
+    <p class="section-subtitle">Wähle das richtige Verb für jede Nomen-Verb-Verbindung. 10 Übungen pro Seite.</p>
+
+    {% if exercises %}
+    <div class="exercise-list" id="nvv-exercise-list"></div>
+
+    <div class="pagination">
+        <button class="page-btn" id="prev-btn" onclick="changePage(-1)" disabled>← Zurück</button>
+        <span class="page-info" id="page-info">Seite 1</span>
+        <button class="page-btn" id="next-btn" onclick="changePage(1)">Weiter →</button>
+    </div>
+
+    <div class="exercise-score" id="nvv-score">
+        <div class="score-big" id="nvv-score-num">0</div>
+        <div style="color:var(--muted);font-size:0.95rem;">Richtig auf dieser Seite</div>
+    </div>
+
+    {% else %}
+    <p style="color:var(--muted);">Noch keine Übungen. Führe <code>python manage.py generate_grammar_content</code> aus.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+{{ exercises_json|json_script:"nvv-exercises-data" }}
+<script>
+// ── Alphabet navigation ──────────────────────────────────────
+const groups   = document.querySelectorAll('.nvv-group');
+const letters  = [...groups].map(g => g.dataset.letter);
+const alphaNav = document.getElementById('alpha-nav');
+
+letters.forEach((letter, i) => {
+    const btn = document.createElement('button');
+    btn.className   = 'alpha-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = letter;
+    btn.onclick     = () => showLetter(letter, btn);
+    alphaNav.appendChild(btn);
+});
+
+// Show first letter by default
+if (groups.length > 0) groups[0].classList.add('active');
+
+function showLetter(letter, btn) {
+    groups.forEach(g => g.classList.remove('active'));
+    document.querySelectorAll('.alpha-btn').forEach(b => b.classList.remove('active'));
+    const group = document.querySelector(`.nvv-group[data-letter="${letter}"]`);
+    if (group) group.classList.add('active');
+    btn.classList.add('active');
+}
+
+// ── Toggle examples ──────────────────────────────────────────
+function toggleExamples(card) {
+    const examples = card.querySelector('.nvv-examples');
+    const toggle   = card.querySelector('.nvv-toggle');
+    if (!examples) return;
+    const isOpen = examples.classList.toggle('open');
+    toggle.textContent = isOpen ? '▲ Beispiele verstecken' : '▼ Beispiele anzeigen';
+}
+
+// ── Paginated exercises ──────────────────────────────────────
+const allExercises = JSON.parse(
+    document.getElementById('nvv-exercises-data').textContent
+);
+
+const PAGE_SIZE  = 10;
+let currentPage  = 0;
+let pageAnswered = {};
+let pageScore    = 0;
+const totalPages = Math.ceil(allExercises.length / PAGE_SIZE);
+
+function renderPage(page) {
+    pageAnswered = {};
+    pageScore    = 0;
+    document.getElementById('nvv-score').classList.remove('show');
+    document.getElementById('nvv-score-num').textContent = '0';
+
+    const start    = page * PAGE_SIZE;
+    const end      = Math.min(start + PAGE_SIZE, allExercises.length);
+    const pageExes = allExercises.slice(start, end);
+    const list     = document.getElementById('nvv-exercise-list');
+
+    list.innerHTML = pageExes.map((ex, i) => `
+        <div class="exercise-item" id="nvv-ex-${i}">
+            <div class="ex-number">Übung ${start + i + 1}</div>
+            ${ex.collocation ? `<div class="ex-collocation-hint">💡 ${ex.collocation}</div>` : ''}
+            <div class="ex-sentence">${ex.sentence}</div>
+            <div class="ex-options">
+                ${ex.options.map(opt => `
+                    <button class="ex-option" onclick="checkAnswer(${i}, '${opt.replace(/'/g,"\\'")}', '${ex.correct.replace(/'/g,"\\'")}', '${ex.explanation.replace(/'/g,"\\'")}', this)">
+                        ${opt}
+                    </button>
+                `).join('')}
+            </div>
+            <div class="ex-feedback" id="nvv-feedback-${i}"></div>
+        </div>
+    `).join('');
+
+    document.getElementById('page-info').textContent  = `Seite ${page + 1} / ${totalPages}`;
+    document.getElementById('prev-btn').disabled = page === 0;
+    document.getElementById('next-btn').disabled = page === totalPages - 1;
+}
+
+function changePage(dir) {
+    currentPage = Math.max(0, Math.min(totalPages - 1, currentPage + dir));
+    renderPage(currentPage);
+    document.querySelector('.exercises-section').scrollIntoView({ behavior: 'smooth' });
+}
+
+function checkAnswer(index, chosen, correct, explanation, btn) {
+    if (pageAnswered[index]) return;
+    pageAnswered[index] = true;
+
+    const item     = document.getElementById('nvv-ex-' + index);
+    const feedback = document.getElementById('nvv-feedback-' + index);
+    const options  = item.querySelectorAll('.ex-option');
+
+    options.forEach(opt => {
+        if (opt.textContent.trim() === correct) opt.classList.add('correct');
+    });
+
+    if (chosen === correct) {
+        btn.classList.add('correct');
+        pageScore++;
+        feedback.innerHTML = `✓ Richtig! ${explanation ? '<span style="opacity:0.7;font-size:0.85rem;">' + explanation + '</span>' : ''}`;
+        feedback.style.color = '#4caf50';
+    } else {
+        btn.classList.add('wrong');
+        feedback.innerHTML = `✗ Falsch. Richtig: "<strong>${correct}</strong>". ${explanation ? '<span style="opacity:0.7;font-size:0.85rem;">' + explanation + '</span>' : ''}`;
+        feedback.style.color = '#f44336';
+    }
+    feedback.classList.add('show');
+    options.forEach(o => { o.disabled = true; o.style.cursor = 'default'; });
+
+    document.getElementById('nvv-score-num').textContent = pageScore;
+    const pageSize = Math.min(PAGE_SIZE, allExercises.length - currentPage * PAGE_SIZE);
+    if (Object.keys(pageAnswered).length === pageSize) {
+        document.getElementById('nvv-score').classList.add('show');
+    }
+}
+
+// Init
+if (allExercises.length > 0) renderPage(0);
+</script>
+{% endblock %}

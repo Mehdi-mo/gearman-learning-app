@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% block title %}Meine Übungen — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-title { font-family: 'Playfair Display', serif; font-size: 2.5rem; margin-bottom: 0.5rem; }
+    .page-subtitle { color: var(--muted); margin-bottom: 2.5rem; font-size: 1.05rem; }
+
+    .stats-row { display: flex; gap: 1.5rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+    .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1.2rem 1.8rem; text-align: center; flex: 1; min-width: 120px; }
+    .stat-card .num { font-family: 'Playfair Display', serif; font-size: 2.2rem; color: var(--gold); }
+    .stat-card .lbl { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
+
+    .section-title { font-family: 'Playfair Display', serif; font-size: 1.5rem; margin: 2rem 0 1rem; padding-top: 1.5rem; border-top: 1px solid var(--border2); color: var(--text); }
+
+    .attempt-list { max-width: 750px; display: flex; flex-direction: column; gap: 0.8rem; }
+    .attempt-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.3rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .attempt-sentence { font-size: 1rem; color: var(--text); flex: 1; }
+    .attempt-collocation { font-size: 0.85rem; color: var(--gold); font-style: italic; margin-top: 0.2rem; }
+    .attempt-stats { display: flex; gap: 0.5rem; flex-shrink: 0; }
+    .attempt-badge { font-size: 0.75rem; padding: 0.2rem 0.6rem; border-radius: 10px; }
+    .badge-correct { background: rgba(76,175,80,0.1);  color: #4caf50; border: 1px solid rgba(76,175,80,0.3); }
+    .badge-wrong   { background: rgba(244,67,54,0.1);  color: #f44336; border: 1px solid rgba(244,67,54,0.3); }
+    .badge-due     { background: rgba(255,193,7,0.1);  color: #ffc107; border: 1px solid rgba(255,193,7,0.3); }
+
+    .back-btn { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--gold); text-decoration: none; font-size: 1rem; margin-bottom: 2rem; }
+    .empty-msg { color: var(--muted); font-size: 0.95rem; padding: 1rem 0; }
+</style>
+{% endblock %}
+
+{% block content %}
+<a href="{% url 'learn_by_guessing' %}" class="back-btn">← Zurück zum Üben</a>
+
+<h1 class="page-title">Meine Übungen</h1>
+<p class="page-subtitle">Überblick über deine gelösten und noch zu übenden Aufgaben.</p>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="num">{{ total_attempted }}</div>
+        <div class="lbl">Versucht</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ correct_attempts.count }}</div>
+        <div class="lbl">✓ Gemeistert</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ wrong_attempts.count }}</div>
+        <div class="lbl">✗ Falsch</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ due_attempts.count }}</div>
+        <div class="lbl">⏰ Fällig</div>
+    </div>
+</div>
+
+<!-- Due for review -->
+{% if due_attempts %}
+<h2 class="section-title">⏰ Fällig zur Wiederholung</h2>
+<div class="attempt-list">
+    {% for attempt in due_attempts %}
+    <div class="attempt-item">
+        <div>
+            <div class="attempt-sentence">{{ attempt.exercise.sentence }}</div>
+            {% if attempt.exercise.collocation %}
+            <div class="attempt-collocation">{{ attempt.exercise.collocation }}</div>
+            {% endif %}
+        </div>
+        <div class="attempt-stats">
+            <span class="attempt-badge badge-correct">✓ {{ attempt.times_correct }}</span>
+            <span class="attempt-badge badge-wrong">✗ {{ attempt.times_wrong }}</span>
+            <span class="attempt-badge badge-due">Fällig</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Wrong answers -->
+{% if wrong_attempts %}
+<h2 class="section-title">✗ Noch nicht gemeistert</h2>
+<div class="attempt-list">
+    {% for attempt in wrong_attempts %}
+    <div class="attempt-item">
+        <div>
+            <div class="attempt-sentence">{{ attempt.exercise.sentence }}</div>
+            {% if attempt.exercise.collocation %}
+            <div class="attempt-collocation">{{ attempt.exercise.collocation }}</div>
+            {% endif %}
+        </div>
+        <div class="attempt-stats">
+            <span class="attempt-badge badge-wrong">✗ {{ attempt.times_wrong }}x falsch</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Correct answers -->
+{% if correct_attempts %}
+<h2 class="section-title">✓ Gemeistert</h2>
+<div class="attempt-list">
+    {% for attempt in correct_attempts %}
+    <div class="attempt-item">
+        <div>
+            <div class="attempt-sentence">{{ attempt.exercise.sentence }}</div>
+            {% if attempt.exercise.collocation %}
+            <div class="attempt-collocation">{{ attempt.exercise.collocation }}</div>
+            {% endif %}
+        </div>
+        <div class="attempt-stats">
+            <span class="attempt-badge badge-correct">✓ {{ attempt.times_correct }}x richtig</span>
+            {% if attempt.times_wrong > 0 %}
+            <span class="attempt-badge badge-wrong">✗ {{ attempt.times_wrong }}x falsch</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if not due_attempts and not wrong_attempts and not correct_attempts %}
+<p class="empty-msg">Du hast noch keine Übungen versucht. <a href="{% url 'learn_by_guessing' %}" style="color:var(--gold);">Jetzt starten →</a></p>
+{% endif %}
+
+{% endblock %}

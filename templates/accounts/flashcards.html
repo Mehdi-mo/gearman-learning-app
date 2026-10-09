@@ -1,0 +1,371 @@
+{% extends 'base.html' %}
+{% block title %}Karteikarten — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-hero { padding: 3rem 0 2rem; border-bottom: 1px solid var(--border2); margin-bottom: 2.5rem; }
+    .page-hero h1 { font-family: 'Playfair Display', serif; font-size: 2.8rem; margin-bottom: 0.5rem; }
+    .page-hero p { color: var(--muted); font-size: 1.05rem; max-width: 600px; }
+
+    /* Stats */
+    .stats-row { display: flex; gap: 1.5rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+    .stat-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1.2rem 1.8rem; text-align: center; flex: 1; min-width: 120px; }
+    .stat-card .num { font-family: 'Playfair Display', serif; font-size: 2.2rem; color: var(--gold); }
+    .stat-card .lbl { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; }
+    .stat-card.highlight { border-color: var(--gold); background: rgba(201,168,76,0.05); }
+
+    /* Start button */
+    .start-section { margin-bottom: 3rem; }
+    .start-btn { display: inline-flex; align-items: center; gap: 0.7rem; background: var(--gold); color: #fff; padding: 1rem 2rem; border-radius: 4px; font-size: 1.1rem; font-weight: 600; text-decoration: none; border: none; cursor: pointer; font-family: 'Source Sans 3', sans-serif; transition: background 0.2s; }
+    .start-btn:hover { background: var(--gold-light); }
+    .start-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .no-cards-msg { color: var(--muted); font-size: 1rem; margin-top: 1rem; }
+
+    /* Flashcard */
+    .flashcard-session { display: none; max-width: 680px; }
+    .flashcard-session.active { display: block; }
+
+    .progress-bar-wrap { background: var(--bg3); border-radius: 10px; height: 6px; margin-bottom: 1.5rem; overflow: hidden; }
+    .progress-bar-fill { background: var(--gold); height: 100%; border-radius: 10px; transition: width 0.4s; }
+    .progress-label { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.5rem; }
+
+    .flashcard { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; padding: 3rem 2.5rem; text-align: center; min-height: 280px; display: flex; flex-direction: column; justify-content: center; align-items: center; margin-bottom: 1.5rem; position: relative; transition: all 0.3s; }
+    .flashcard.flipped { border-color: var(--gold); background: rgba(201,168,76,0.03); }
+
+    .card-type-badge { font-size: 0.7rem; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 1rem; }
+    .card-word { font-family: 'Playfair Display', serif; font-size: 2.2rem; color: var(--text); margin-bottom: 0.5rem; line-height: 1.2; }
+    .card-hint { font-size: 0.9rem; color: var(--muted); margin-bottom: 1rem; }
+
+    .card-answer { display: none; width: 100%; }
+    .card-answer.show { display: block; }
+    .card-translation { font-size: 1.3rem; color: var(--gold); margin-bottom: 1rem; font-weight: 600; }
+    .card-example { color: var(--muted); font-size: 0.95rem; font-style: italic; border-top: 1px solid var(--border2); padding-top: 1rem; margin-top: 0.5rem; line-height: 1.6; }
+    .card-example-tr { font-size: 0.85rem; font-style: normal; opacity: 0.7; margin-top: 0.3rem; }
+
+    .card-stats { position: absolute; top: 1rem; right: 1rem; display: flex; gap: 0.5rem; }
+    .card-stat { font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 10px; }
+    .card-stat.correct { background: rgba(76,175,80,0.1); color: #4caf50; }
+    .card-stat.wrong   { background: rgba(244,67,54,0.1);  color: #f44336; }
+
+    /* Reveal button */
+    .reveal-btn { background: transparent; border: 1px solid var(--border2); color: var(--muted); padding: 0.7rem 1.8rem; border-radius: 4px; cursor: pointer; font-size: 1rem; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; margin-bottom: 1rem; }
+    .reveal-btn:hover { border-color: var(--gold); color: var(--gold); }
+
+    /* Rating buttons */
+    .rating-btns { display: none; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .rating-btns.show { display: flex; }
+    .rating-btn { padding: 0.8rem 1.5rem; border-radius: 4px; cursor: pointer; font-size: 1rem; font-weight: 600; font-family: 'Source Sans 3', sans-serif; border: none; transition: all 0.2s; min-width: 100px; }
+    .btn-again { background: rgba(244,67,54,0.15); color: #f44336; border: 1px solid rgba(244,67,54,0.3); }
+    .btn-again:hover { background: rgba(244,67,54,0.25); }
+    .btn-hard  { background: rgba(255,193,7,0.15); color: #ffc107; border: 1px solid rgba(255,193,7,0.3); }
+    .btn-hard:hover  { background: rgba(255,193,7,0.25); }
+    .btn-easy  { background: rgba(76,175,80,0.15); color: #4caf50; border: 1px solid rgba(76,175,80,0.3); }
+    .btn-easy:hover  { background: rgba(76,175,80,0.25); }
+
+    .interval-hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; text-align: center; }
+
+    /* Session complete */
+    .session-complete { display: none; text-align: center; padding: 3rem 2rem; background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; max-width: 500px; }
+    .session-complete.show { display: block; }
+    .complete-icon { font-size: 3rem; margin-bottom: 1rem; }
+    .complete-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 0.5rem; color: var(--text); }
+    .complete-sub { color: var(--muted); font-size: 1rem; margin-bottom: 2rem; }
+    .complete-stats { display: flex; gap: 2rem; justify-content: center; margin-bottom: 2rem; }
+    .complete-stat .num { font-family: 'Playfair Display', serif; font-size: 1.8rem; color: var(--gold); }
+    .complete-stat .lbl { font-size: 0.85rem; color: var(--muted); }
+
+    /* Preview list */
+    .preview-title { font-family: 'Playfair Display', serif; font-size: 1.3rem; margin-bottom: 1rem; color: var(--text); }
+    .preview-list { list-style: none; max-width: 500px; }
+    .preview-item { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+    .preview-item .word { color: var(--gold); font-family: 'Playfair Display', serif; }
+    .preview-item .tr   { color: var(--muted); }
+
+    .empty-state { text-align: center; padding: 3rem; color: var(--muted); }
+    .empty-state h2 { font-family: 'Playfair Display', serif; font-size: 1.8rem; margin-bottom: 1rem; }
+    .empty-state a { color: var(--gold); text-decoration: none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-hero">
+    <h1>🃏 Karteikarten</h1>
+    <p>Übe deine gespeicherten Wörter mit dem Spaced-Repetition-System — je öfter du übst, desto länger erinnerst du dich.</p>
+</div>
+
+{% if total == 0 %}
+<div class="empty-state">
+    <h2>Noch keine Wörter gespeichert</h2>
+    <p>Lies einen <a href="{% url 'article_list' %}">Artikel</a> oder ein <a href="{% url 'conversation_list' %}">Gespräch</a> und speichere Wörter mit dem ★ Button.</p>
+</div>
+
+{% else %}
+
+<!-- Stats -->
+<div class="stats-row">
+    <div class="stat-card highlight">
+        <div class="num">{{ due_count }}</div>
+        <div class="lbl">Fällig heute</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ total }}</div>
+        <div class="lbl">Gesamt</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ mastered }}</div>
+        <div class="lbl">Gemeistert</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ correct_total }}</div>
+        <div class="lbl">Richtig gesamt</div>
+    </div>
+    <div class="stat-card">
+        <div class="num">{{ wrong_total }}</div>
+        <div class="lbl">Falsch gesamt</div>
+    </div>
+</div>
+
+<!-- Start section -->
+<div class="start-section">
+    {% if due_count > 0 %}
+        <button class="start-btn" onclick="startSession()">
+            ▶ {{ due_count }} Karten üben
+        </button>
+        <p class="no-cards-msg">Diese Wörter sind heute fällig. Übe sie jetzt!</p>
+    {% else %}
+        <button class="start-btn" disabled>✓ Alle Karten für heute erledigt</button>
+        <p class="no-cards-msg">Gut gemacht! Komm morgen wieder für neue Wiederholungen.</p>
+    {% endif %}
+</div>
+
+<!-- Preview of due words -->
+{% if due_words %}
+<p class="preview-title">Als nächstes fällig:</p>
+<ul class="preview-list">
+    {% for w in due_words %}
+    <li class="preview-item">
+        <span class="word">{{ w.word }}</span>
+        <span class="tr">{{ w.translation }}</span>
+    </li>
+    {% endfor %}
+</ul>
+{% endif %}
+
+<!-- Flashcard session (hidden until started) -->
+<div class="flashcard-session" id="flashcard-session">
+    <div class="progress-label" id="progress-label">0 / {{ due_count }}</div>
+    <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+    </div>
+
+    <div class="flashcard" id="flashcard">
+        <div class="card-stats">
+            <span class="card-stat correct" id="stat-correct">✓ 0</span>
+            <span class="card-stat wrong"   id="stat-wrong">✗ 0</span>
+        </div>
+        <div class="card-type-badge" id="card-type">Wort</div>
+        <div class="card-word"       id="card-word">—</div>
+        <div class="card-hint"       id="card-hint">Was bedeutet dieses Wort?</div>
+
+        <div class="card-answer" id="card-answer">
+            <div class="card-translation" id="card-translation"></div>
+            <div class="card-example"     id="card-example">
+                <div id="card-example-text"></div>
+                <div class="card-example-tr" id="card-example-tr"></div>
+            </div>
+        </div>
+    </div>
+
+    <button class="reveal-btn" id="reveal-btn" onclick="revealAnswer()">
+        Antwort zeigen
+    </button>
+
+    <div class="rating-btns" id="rating-btns">
+        <button class="rating-btn btn-again" onclick="submitRating(0)">🔄 Nochmal</button>
+        <button class="rating-btn btn-hard"  onclick="submitRating(1)">😅 Schwer</button>
+        <button class="rating-btn btn-easy"  onclick="submitRating(2)">✓ Leicht</button>
+    </div>
+    <div class="interval-hint" id="interval-hint"></div>
+</div>
+
+<!-- Session complete -->
+<div class="session-complete" id="session-complete">
+    <div class="complete-icon">🎉</div>
+    <div class="complete-title">Sitzung abgeschlossen!</div>
+    <div class="complete-sub">Du hast alle fälligen Karten für heute geübt.</div>
+    <div class="complete-stats">
+        <div class="complete-stat">
+            <div class="num" id="final-correct">0</div>
+            <div class="lbl">Richtig</div>
+        </div>
+        <div class="complete-stat">
+            <div class="num" id="final-wrong">0</div>
+            <div class="lbl">Falsch</div>
+        </div>
+    </div>
+    <a href="{% url 'flashcards' %}" class="start-btn" style="display:inline-flex;margin:0 auto;">
+        Neu laden
+    </a>
+</div>
+
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Due words passed from Django
+const dueWords = [
+    {% for w in due_words %}
+    {
+        id:          {{ w.pk }},
+        word:        "{{ w.word|escapejs }}",
+        translation: "{{ w.translation|escapejs }}",
+        example:     "{{ w.example|escapejs }}",
+        example_translation: "{{ w.example_translation|escapejs }}",
+        word_type:   "{{ w.word_type }}",
+        times_correct: {{ w.times_correct }},
+        times_wrong:   {{ w.times_wrong }},
+    },
+    {% endfor %}
+];
+
+// Django renders only the first handful of due words (enough for the preview
+// and the opening card). Every card after that comes from the review endpoint,
+// which walks the user's whole due queue — the session used to end as soon as
+// this short seed list ran out, capping a review at five cards.
+let currentWord    = null;
+let againQueue     = [];   // cards rated "Nochmal", re-shown later this session
+let sessionCorrect = 0;
+let sessionWrong   = 0;
+let sessionReviewed = 0;
+const totalDue     = {{ due_count }};
+
+function startSession() {
+    // Hide start section, show flashcard session
+    document.querySelector('.start-section').style.display = 'none';
+    document.querySelector('.preview-title') && (document.querySelector('.preview-title').style.display = 'none');
+    document.querySelector('.preview-list')  && (document.querySelector('.preview-list').style.display  = 'none');
+    document.getElementById('flashcard-session').classList.add('active');
+
+    if (dueWords.length > 0) {
+        showCard(dueWords[0]);
+    } else {
+        showComplete();
+    }
+}
+
+function showCard(word) {
+    currentWord = word;
+
+    // Reset card state
+    document.getElementById('flashcard').classList.remove('flipped');
+    document.getElementById('card-answer').classList.remove('show');
+    document.getElementById('reveal-btn').style.display = 'block';
+    document.getElementById('rating-btns').classList.remove('show');
+    document.getElementById('interval-hint').textContent = '';
+
+    // Fill card content
+    document.getElementById('card-type').textContent        = word.word_type === 'verb' ? '⚡ Verb' : '📚 Wort';
+    document.getElementById('card-word').textContent        = word.word;
+    document.getElementById('card-translation').textContent = word.translation;
+    document.getElementById('card-example-text').textContent = word.example || '';
+    document.getElementById('card-example-tr').textContent   = word.example_translation || '';
+    document.getElementById('stat-correct').textContent      = `✓ ${word.times_correct}`;
+    document.getElementById('stat-wrong').textContent        = `✗ ${word.times_wrong}`;
+
+    // Hide example section if no example
+    document.getElementById('card-example').style.display = word.example ? 'block' : 'none';
+
+    updateProgress();
+}
+
+function revealAnswer() {
+    document.getElementById('flashcard').classList.add('flipped');
+    document.getElementById('card-answer').classList.add('show');
+    document.getElementById('reveal-btn').style.display = 'none';
+    document.getElementById('rating-btns').classList.add('show');
+}
+
+async function submitRating(quality) {
+    if (!currentWord) return;
+
+    // Disable buttons while processing
+    document.querySelectorAll('.rating-btn').forEach(b => b.disabled = true);
+
+    const intervalLabels = { 0: 'Morgen wiederholen', 1: 'In wenigen Tagen', 2: 'In mehreren Tagen' };
+    document.getElementById('interval-hint').textContent = intervalLabels[quality] || '';
+
+    // "Schwer" counts as a correct recall server-side (it still raises
+    // times_correct), so count it the same way here instead of dropping it
+    // from both tallies and from the progress bar.
+    const ratedWord = currentWord;
+    if (quality === 0) sessionWrong++;
+    else               sessionCorrect++;
+    sessionReviewed++;
+
+    // Update final stats display
+    document.getElementById('final-correct').textContent = sessionCorrect;
+    document.getElementById('final-wrong').textContent   = sessionWrong;
+
+    try {
+        const resp = await fetch('/accounts/flashcard-review/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ word_id: currentWord.id, quality }),
+        });
+
+        if (!resp.ok) throw new Error('Review failed: ' + resp.status);
+        const data = await resp.json();
+
+        // A word rated "Nochmal" is scheduled for tomorrow server-side, so the
+        // due queue will not hand it back today. Keep it locally and show it
+        // again once the queue is empty, which is what the button promises.
+        if (quality === 0 && ratedWord) againQueue.push(ratedWord);
+        updateProgress();
+
+        // Short pause then show next card
+        setTimeout(() => {
+            document.querySelectorAll('.rating-btn').forEach(b => b.disabled = false);
+
+            if (data.next_word) {
+                showCard(data.next_word);
+            } else if (againQueue.length > 0) {
+                showCard(againQueue.shift());
+            } else {
+                showComplete();
+            }
+        }, 600);
+
+    } catch(e) {
+        console.error(e);
+        document.querySelectorAll('.rating-btn').forEach(b => b.disabled = false);
+        document.getElementById('interval-hint').textContent =
+            'Speichern fehlgeschlagen — bitte Seite neu laden.';
+    }
+}
+
+function showComplete() {
+    document.getElementById('flashcard-session').classList.remove('active');
+    document.getElementById('session-complete').classList.add('show');
+    document.getElementById('final-correct').textContent = sessionCorrect;
+    document.getElementById('final-wrong').textContent   = sessionWrong;
+}
+
+function updateProgress() {
+    const done = Math.min(sessionReviewed, totalDue);
+    const pct  = totalDue > 0 ? Math.min(100, Math.round((done / totalDue) * 100)) : 0;
+    document.getElementById('progress-bar').style.width   = pct + '%';
+    document.getElementById('progress-label').textContent = `${done} / ${totalDue}`;
+}
+
+function getCookie(name) {
+    const v = `; ${document.cookie}`;
+    const p = v.split(`; ${name}=`);
+    if (p.length === 2) return p.pop().split(';').shift();
+}
+</script>
+{% endblock %}

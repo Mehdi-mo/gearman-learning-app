@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Einstellungen — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .settings-container { max-width: 480px; margin: 3rem auto; }
+    .settings-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 0.5rem; }
+    .settings-subtitle { color: var(--muted); margin-bottom: 2.5rem; font-weight: 300; }
+    .form-group { margin-bottom: 1.4rem; }
+    .form-group label { display: block; font-size: 0.85rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .form-group select { width: 100%; padding: 0.8rem 1rem; background: var(--bg2); border: 1px solid var(--border2); color: var(--text); border-radius: 2px; font-family: 'Source Sans 3', sans-serif; font-size: 1rem; transition: border-color 0.2s; }
+    .form-group select:focus { outline: none; border-color: var(--gold); }
+    .form-group select option { background: var(--bg2); }
+    .save-btn { width: 100%; padding: 0.9rem; font-size: 1rem; margin-top: 0.5rem; }
+    .success-msg { background: rgba(76,175,80,0.1); border: 1px solid rgba(76,175,80,0.3); border-radius: 4px; padding: 0.8rem 1rem; color: #4caf50; margin-bottom: 1.5rem; font-size: 0.95rem; }
+    .section-divider { border-top: 1px solid var(--border2); margin: 2.5rem 0; }
+    .danger-zone h3 { font-family: 'Playfair Display', serif; font-size: 1.2rem; margin-bottom: 0.5rem; color: #e05c5c; }
+    .danger-zone p { color: var(--muted); font-size: 0.95rem; margin-bottom: 1rem; }
+    .btn-danger { background: transparent; border: 1px solid #e05c5c; color: #e05c5c; padding: 0.6rem 1.2rem; border-radius: 2px; cursor: pointer; font-size: 0.9rem; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; text-decoration: none; display: inline-block; }
+    .btn-danger:hover { background: rgba(224,92,92,0.1); }
+    .info-row { display: flex; justify-content: space-between; padding: 0.8rem 0; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+    .info-row span:first-child { color: var(--muted); }
+    .info-row span:last-child { color: var(--text); font-weight: 400; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+    <h1 class="settings-title">Einstellungen</h1>
+    <p class="settings-subtitle">Passe dein Lernerlebnis an.</p>
+
+    <!-- Account info -->
+    <div style="background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:1.2rem 1.4rem; margin-bottom:2rem;">
+        <div class="info-row"><span>Benutzername</span><span>{{ user.username }}</span></div>
+        <div class="info-row"><span>Mitglied seit</span><span>{{ user.date_joined|date:"d.m.Y" }}</span></div>
+        <div class="info-row" style="border:none;"><span>Gelesene Artikel</span><span>{{ user.read_articles.count }}</span></div>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="form-group">
+            <label>{{ field.label }}</label>
+            {{ field }}
+            {% if field.errors %}<div style="color:#e05c5c;font-size:0.85rem;margin-top:0.3rem;">{{ field.errors }}</div>{% endif %}
+        </div>
+        {% endfor %}
+        <button type="submit" class="btn save-btn">Speichern</button>
+    </form>
+
+    <div class="section-divider"></div>
+
+    <div class="danger-zone">
+        <h3>Gespeicherte Wörter</h3>
+        <p>Du hast {{ user.saved_words.count }} gespeicherte Wörter.</p>
+        <a href="{% url 'saved_words' %}" class="btn-danger">Wörter verwalten →</a>
+    </div>
+</div>
+{% endblock %}

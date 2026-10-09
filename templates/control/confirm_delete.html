@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}Löschen bestätigen — Admin{% endblock %}
+
+{% block extra_css %}
+<style>
+    .warn { max-width:680px; margin:3rem auto 0; }
+    .warn h1 { font-family:'Playfair Display',serif; font-size:2rem; margin-bottom:1rem; }
+    .warn > p { color:var(--muted); font-weight:300; line-height:1.7; margin-bottom:1.5rem; }
+    .impact { background:var(--bg2); border:1px solid var(--border); border-left:3px solid #c75c5c; border-radius:4px; padding:1.3rem 1.5rem; margin-bottom:1.5rem; }
+    .impact b { color:#c75c5c; }
+    .impact ul { list-style:none; margin-top:0.7rem; }
+    .impact li { padding:0.3rem 0; color:var(--text2); font-weight:300; }
+    .items { background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:1.1rem 1.4rem; margin-bottom:1.8rem; max-height:260px; overflow:auto; }
+    .items li { list-style:none; padding:0.35rem 0; border-bottom:1px solid var(--border); font-size:0.92rem; color:var(--text2); font-weight:300; }
+    .items li:last-child { border-bottom:none; }
+    .acts { display:flex; gap:1rem; flex-wrap:wrap; }
+    .btn-danger { background:#c75c5c; border:none; color:#fff; padding:0.55rem 1.3rem; border-radius:2px; font-size:0.85rem; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; cursor:pointer; font-family:inherit; }
+    .btn-ghost-sm { background:none; border:1px solid var(--border2); color:var(--text2); padding:0.55rem 1.3rem; border-radius:2px; font-size:0.85rem; font-weight:600; text-transform:uppercase; letter-spacing:0.5px; text-decoration:none; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="warn">
+    <h1>{{ count }} {% if kind == 'conversations' %}Gespräch{{ count|pluralize:"e" }}{% else %}Artikel{% endif %} löschen?</h1>
+    <p>Das lässt sich nicht rückgängig machen.</p>
+
+    {% if unlocks or reads %}
+    <div class="impact">
+        <b>Das betrifft auch Nutzer:</b>
+        <ul>
+            {% if unlocks %}<li>{{ unlocks }} Freischaltung{{ unlocks|pluralize:"en" }} — wer dafür sein Tageslimit ausgegeben hat, verliert es.</li>{% endif %}
+            {% if reads %}<li>{{ reads }} Eintrag{{ reads|pluralize:"e" }} im Leseverlauf verschwinden.</li>{% endif %}
+        </ul>
+    </div>
+    {% else %}
+    <div class="impact" style="border-left-color:#4caf50">
+        <b style="color:#4caf50">Kein Nutzer betroffen.</b>
+        <ul><li>Diese Inhalte hat noch niemand geöffnet oder gelesen.</li></ul>
+    </div>
+    {% endif %}
+
+    <ul class="items">
+        {% for item in items %}
+        <li>{% if kind == 'conversations' %}{{ item.topic }}{% else %}{{ item.title }}{% endif %}</li>
+        {% endfor %}
+        {% if count > 20 %}<li style="color:var(--muted)">… und {{ count|add:"-20" }} weitere</li>{% endif %}
+    </ul>
+
+    <form method="post" action="{% url 'control_delete' %}" class="acts">{% csrf_token %}
+        <input type="hidden" name="kind" value="{{ kind }}">
+        <input type="hidden" name="confirmed" value="1">
+        <input type="hidden" name="next" value="{{ next }}">
+        {% for i in ids %}<input type="hidden" name="ids" value="{{ i }}">{% endfor %}
+        <button class="btn-danger" type="submit">Ja, endgültig löschen</button>
+        <a class="btn-ghost-sm" href="{{ next|default:'/control/' }}">Abbrechen</a>
+    </form>
+</div>
+{% endblock %}

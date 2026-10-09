@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% comment %}
+Shared styling for the auth screens. It fills in extra_css only, so each child
+page's own {% block content %} passes straight through to base.html.
+{% endcomment %}
+{% block extra_css %}
+<style>
+    .auth-container { max-width: 420px; margin: 4rem auto; }
+    .auth-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 0.5rem; }
+    .auth-subtitle { color: var(--muted); margin-bottom: 2rem; font-weight: 300; font-size: 1.05rem; line-height: 1.6; }
+    .form-group { margin-bottom: 1.2rem; }
+    .form-group label { display: block; font-size: 0.85rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .form-group input { width: 100%; padding: 0.8rem 1rem; background: var(--bg2); border: 1px solid var(--border2); color: var(--text); border-radius: 2px; font-family: 'Source Sans 3', sans-serif; font-size: 1rem; transition: border-color 0.2s; }
+    .form-group input:focus { outline: none; border-color: var(--gold); }
+    .helptext { display: block; font-size: 0.82rem; color: var(--muted); margin-top: 0.35rem; font-weight: 300; }
+    .auth-btn { width: 100%; padding: 0.9rem; margin-top: 0.5rem; font-size: 1rem; }
+    .auth-link { text-align: center; margin-top: 1.5rem; color: var(--muted); font-size: 1rem; }
+    .auth-link a { color: var(--gold); text-decoration: none; }
+    .errorlist { color: #e05c5c; font-size: 0.9rem; margin-top: 0.3rem; list-style: none; }
+    .error-box { background: rgba(224,92,92,0.1); border: 1px solid rgba(224,92,92,0.3); border-radius: 4px; padding: 0.8rem 1rem; margin-bottom: 1rem; color: #e05c5c; font-size: 0.95rem; }
+</style>
+{% endblock %}

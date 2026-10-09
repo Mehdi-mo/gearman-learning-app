@@ -1,0 +1,216 @@
+{% extends 'base.html' %}
+{% block title %}Präpositionen — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-hero { padding: 3rem 0 2rem; border-bottom: 1px solid var(--border2); margin-bottom: 2.5rem; }
+    .page-hero h1 { font-family: 'Playfair Display', serif; font-size: 2.8rem; margin-bottom: 0.5rem; }
+    .page-hero p { color: var(--muted); font-size: 1.05rem; max-width: 600px; }
+
+    /* Prep nav */
+    .prep-nav { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 2.5rem; }
+    .prep-nav a { padding: 0.4rem 1rem; border: 1px solid var(--border2); border-radius: 2px; color: var(--muted); text-decoration: none; font-size: 0.95rem; transition: all 0.2s; }
+    .prep-nav a:hover { border-color: var(--gold); color: var(--gold); }
+    .prep-nav a.active { background: var(--gold); border-color: var(--gold); color: #fff; }
+
+    /* Lesson card */
+    .lesson-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 2rem; margin-bottom: 2rem; scroll-margin-top: 80px; display: none; }
+    .lesson-card.active { display: block; }
+    .lesson-prep { font-family: 'Playfair Display', serif; font-size: 2rem; color: var(--gold); margin-bottom: 0.3rem; }
+    .lesson-use { font-size: 0.85rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 1rem; }
+    .lesson-explanation { color: var(--text2); font-size: 1rem; line-height: 1.7; margin-bottom: 1.5rem; background: var(--bg3); padding: 1rem 1.2rem; border-radius: 4px; border-left: 3px solid var(--gold); }
+    .examples-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0.8rem; }
+    .example-item { background: var(--bg3); border-radius: 4px; padding: 0.8rem 1rem; }
+    .example-de { color: var(--text); font-size: 1rem; margin-bottom: 0.2rem; }
+    .example-tr { color: var(--muted); font-size: 0.85rem; font-style: italic; }
+
+    /* Exercises */
+    .exercises-section { margin-top: 3rem; padding-top: 2rem; border-top: 1px solid var(--border2); }
+    .section-title { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 0.5rem; }
+    .section-subtitle { color: var(--muted); margin-bottom: 2rem; font-size: 1rem; }
+
+    .exercise-list { max-width: 750px; }
+    .exercise-item { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1.3rem 1.5rem; margin-bottom: 1rem; }
+    .ex-number { font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .ex-sentence { font-size: 1.1rem; color: var(--text); margin-bottom: 1rem; line-height: 1.5; }
+    .ex-options { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem; }
+    .ex-option { padding: 0.4rem 1rem; border: 1px solid var(--border2); border-radius: 20px; cursor: pointer; font-size: 0.95rem; color: var(--muted); background: transparent; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; }
+    .ex-option:hover { border-color: var(--gold); color: var(--gold); }
+    .ex-option.correct { border-color: #4caf50; color: #4caf50; background: rgba(76,175,80,0.1); }
+    .ex-option.wrong   { border-color: #f44336; color: #f44336; background: rgba(244,67,54,0.1); }
+    .ex-feedback { font-size: 0.9rem; color: var(--muted); margin-top: 0.5rem; display: none; }
+    .ex-feedback.show { display: block; }
+
+    /* Pagination */
+    .pagination { display: flex; align-items: center; gap: 1rem; margin-top: 1.5rem; }
+    .page-btn { padding: 0.5rem 1.2rem; border: 1px solid var(--border2); background: transparent; color: var(--muted); border-radius: 2px; cursor: pointer; font-size: 0.95rem; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; }
+    .page-btn:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+    .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+    .page-info { color: var(--muted); font-size: 0.9rem; }
+
+    .exercise-score { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.2rem 1.5rem; margin-top: 1.5rem; display: none; max-width: 300px; }
+    .exercise-score.show { display: block; }
+    .score-big { font-family: 'Playfair Display', serif; font-size: 2.5rem; color: var(--gold); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-hero">
+    <h1>Präpositionen</h1>
+    <p>Lerne wann du <strong>in, zu, nach, bei, an, auf, mit, von</strong> verwendest — mit Erklärungen, Beispielen und Übungen.</p>
+</div>
+
+<!-- Prep navigation -->
+<div class="prep-nav">
+    {% for prep in prepositions %}
+    <a href="#" class="prep-link {% if forloop.first %}active{% endif %}" data-prep="{{ prep }}">{{ prep }}</a>
+    {% endfor %}
+    <a href="#exercises" style="margin-left:auto;">📝 Übungen</a>
+</div>
+
+<!-- Lessons — one shown at a time -->
+{% for lesson in lessons %}
+<div class="lesson-card {% if forloop.first %}active{% endif %}" data-prep="{{ lesson.preposition }}">
+    <div class="lesson-prep">{{ lesson.preposition }}</div>
+    <div class="lesson-use">{{ lesson.use_case }}</div>
+    <div class="lesson-explanation">{{ lesson.explanation }}</div>
+    <div class="examples-grid">
+        {% for ex in lesson.examples %}
+        <div class="example-item">
+            <div class="example-de">{{ ex.german }}</div>
+            <div class="example-tr">{{ ex.translation }}</div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+
+<!-- Exercises -->
+<div class="exercises-section" id="exercises">
+    <h2 class="section-title">📝 Übungen</h2>
+    <p class="section-subtitle">Wähle die richtige Präposition — 10 Übungen pro Seite.</p>
+
+    {% if exercises %}
+    <div class="exercise-list" id="prep-exercise-list"></div>
+
+    <div class="pagination">
+        <button class="page-btn" id="prep-prev-btn" onclick="prepChangePage(-1)" disabled>← Zurück</button>
+        <span class="page-info" id="prep-page-info">Seite 1</span>
+        <button class="page-btn" id="prep-next-btn" onclick="prepChangePage(1)">Weiter →</button>
+    </div>
+
+    <div class="exercise-score" id="prep-score">
+        <div class="score-big" id="prep-score-num">0</div>
+        <div style="color:var(--muted);font-size:0.95rem;">Richtig auf dieser Seite</div>
+    </div>
+
+    {% else %}
+    <p style="color:var(--muted);">Noch keine Übungen. Führe <code>python manage.py generate_grammar_content</code> aus.</p>
+    {% endif %}
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+{{ exercises_json|json_script:"prep-exercises-data" }}
+<script>
+// ── Preposition switcher ─────────────────────────────────────
+document.querySelectorAll('.prep-link').forEach(link => {
+    link.addEventListener('click', function(e) {
+        e.preventDefault();
+        const prep = this.dataset.prep;
+        document.querySelectorAll('.prep-link').forEach(l => l.classList.remove('active'));
+        document.querySelectorAll('.lesson-card').forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const card = document.querySelector(`.lesson-card[data-prep="${prep}"]`);
+        if (card) {
+            card.classList.add('active');
+            card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    });
+});
+
+// ── Paginated exercises ──────────────────────────────────────
+const prepExercises = JSON.parse(
+    document.getElementById('prep-exercises-data').textContent
+);
+
+const PREP_PAGE_SIZE  = 10;
+let prepCurrentPage   = 0;
+let prepPageAnswered  = {};
+let prepPageScore     = 0;
+const prepTotalPages  = Math.ceil(prepExercises.length / PREP_PAGE_SIZE);
+
+function renderPrepPage(page) {
+    prepPageAnswered = {};
+    prepPageScore    = 0;
+    document.getElementById('prep-score').classList.remove('show');
+    document.getElementById('prep-score-num').textContent = '0';
+
+    const start    = page * PREP_PAGE_SIZE;
+    const end      = Math.min(start + PREP_PAGE_SIZE, prepExercises.length);
+    const pageExes = prepExercises.slice(start, end);
+    const list     = document.getElementById('prep-exercise-list');
+
+    list.innerHTML = pageExes.map((ex, i) => `
+        <div class="exercise-item" id="prep-ex-${i}">
+            <div class="ex-number">Übung ${start + i + 1}</div>
+            <div class="ex-sentence">${ex.sentence}</div>
+            <div class="ex-options">
+                ${ex.options.map(opt => `
+                    <button class="ex-option" onclick="checkPrepAnswer(${i}, '${opt}', '${ex.correct}', '${ex.explanation.replace(/'/g,"\\'")}', this)">
+                        ${opt}
+                    </button>
+                `).join('')}
+            </div>
+            <div class="ex-feedback" id="prep-feedback-${i}"></div>
+        </div>
+    `).join('');
+
+    document.getElementById('prep-page-info').textContent = `Seite ${page + 1} / ${prepTotalPages}`;
+    document.getElementById('prep-prev-btn').disabled = page === 0;
+    document.getElementById('prep-next-btn').disabled = page === prepTotalPages - 1;
+}
+
+function prepChangePage(dir) {
+    prepCurrentPage = Math.max(0, Math.min(prepTotalPages - 1, prepCurrentPage + dir));
+    renderPrepPage(prepCurrentPage);
+    document.getElementById('exercises').scrollIntoView({ behavior: 'smooth' });
+}
+
+function checkPrepAnswer(index, chosen, correct, explanation, btn) {
+    if (prepPageAnswered[index]) return;
+    prepPageAnswered[index] = true;
+
+    const item     = document.getElementById('prep-ex-' + index);
+    const feedback = document.getElementById('prep-feedback-' + index);
+    const options  = item.querySelectorAll('.ex-option');
+
+    options.forEach(opt => {
+        if (opt.textContent.trim() === correct) opt.classList.add('correct');
+    });
+
+    if (chosen === correct) {
+        btn.classList.add('correct');
+        prepPageScore++;
+        feedback.innerHTML = `✓ Richtig! ${explanation ? '<span style="opacity:0.7;font-size:0.85rem;">' + explanation + '</span>' : ''}`;
+        feedback.style.color = '#4caf50';
+    } else {
+        btn.classList.add('wrong');
+        feedback.innerHTML = `✗ Falsch. Richtig: "<strong>${correct}</strong>". ${explanation ? '<span style="opacity:0.7;font-size:0.85rem;">' + explanation + '</span>' : ''}`;
+        feedback.style.color = '#f44336';
+    }
+    feedback.classList.add('show');
+    options.forEach(o => { o.disabled = true; o.style.cursor = 'default'; });
+
+    document.getElementById('prep-score-num').textContent = prepPageScore;
+    const pageSize = Math.min(PREP_PAGE_SIZE, prepExercises.length - prepCurrentPage * PREP_PAGE_SIZE);
+    if (Object.keys(prepPageAnswered).length === pageSize) {
+        document.getElementById('prep-score').classList.add('show');
+    }
+}
+
+// Init
+if (prepExercises.length > 0) renderPrepPage(0);
+</script>
+{% endblock %}

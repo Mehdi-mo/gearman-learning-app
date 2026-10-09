@@ -1,0 +1,223 @@
+{% extends 'base.html' %}
+{% block title %}Start — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .greeting { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 1rem; padding: 2.5rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2.5rem; }
+    .greeting h1 { font-family: 'Playfair Display', serif; font-size: 2.4rem; }
+    .greeting h1 span { color: var(--gold); }
+    .chip { font-size: 0.8rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border2); padding: 0.3rem 0.7rem; border-radius: 2px; }
+    .chip-gold { color: var(--gold); border-color: var(--gold); }
+
+    .upgrade-band { display: flex; justify-content: space-between; align-items: center; gap: 1.5rem; flex-wrap: wrap; background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px; padding: 1.1rem 1.5rem; margin-bottom: 2.5rem; text-decoration: none; color: var(--muted); font-weight: 300; line-height: 1.5; transition: border-color 0.2s; }
+    .upgrade-band:hover { border-color: var(--gold); }
+    .upgrade-band b { color: var(--text); font-weight: 600; }
+    .upgrade-band.spent { border-left-color: #c75c5c; }
+    .upgrade-cta { color: var(--gold); white-space: nowrap; font-size: 0.9rem; }
+
+    .section { margin-bottom: 3rem; }
+    .section-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 1.2rem; }
+    .section-head h2 { font-family: 'Playfair Display', serif; font-size: 1.5rem; }
+    .section-head a { color: var(--muted); text-decoration: none; font-size: 0.9rem; font-weight: 300; }
+    .section-head a:hover { color: var(--gold); }
+
+    /* --- Heute dran --- */
+    .today { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px; padding: 2.2rem 2.4rem; display: flex; align-items: center; justify-content: space-between; gap: 2rem; flex-wrap: wrap; }
+    .today.done { border-left-color: #4caf50; }
+    .today-num { font-family: 'Playfair Display', serif; font-size: 4.2rem; line-height: 1; color: var(--gold); }
+    .today.done .today-num { font-size: 3rem; color: #4caf50; }
+    .today-text h2 { font-family: 'Playfair Display', serif; font-size: 1.6rem; margin-bottom: 0.4rem; }
+    .today-text p { color: var(--muted); font-weight: 300; line-height: 1.6; }
+    .today-left { display: flex; align-items: center; gap: 1.8rem; }
+    .today-actions { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+    .btn-ghost { border: 1px solid var(--border2); color: var(--text2); padding: 0.5rem 1.2rem; border-radius: 2px; font-size: 0.9rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; transition: border-color 0.2s, color 0.2s; }
+    .btn-ghost:hover { border-color: var(--gold); color: var(--gold); }
+
+    /* --- Weiterlesen --- */
+    .next-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 2rem 2.2rem; text-decoration: none; display: block; transition: border-color 0.2s, transform 0.2s; }
+    .next-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+    .next-card .card-title { font-family: 'Playfair Display', serif; font-size: 1.7rem; color: var(--text); line-height: 1.3; margin-bottom: 0.9rem; }
+    .next-card .card-excerpt { color: var(--text2); font-weight: 300; line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+    .card-category { font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin-bottom: 0.7rem; }
+    .card-meta { margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; color: var(--muted); }
+    .read-flag { color: #4caf50; }
+
+    /* --- Artikel-Grid --- */
+    .articles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; }
+    .article-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.6rem; text-decoration: none; display: block; transition: border-color 0.2s, transform 0.2s; }
+    .article-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+    .article-card.is-read { opacity: 0.6; }
+    .article-card .card-title { font-family: 'Playfair Display', serif; font-size: 1.15rem; color: var(--text); line-height: 1.4; margin-bottom: 0.7rem; }
+    .article-card .card-excerpt { color: var(--muted); font-size: 0.95rem; line-height: 1.6; font-weight: 300; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* --- Übungen --- */
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.2rem; }
+    .tile { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.6rem; text-decoration: none; display: block; transition: border-color 0.2s, transform 0.2s; position: relative; }
+    .tile:hover { border-color: var(--gold); transform: translateY(-2px); }
+    .tile-icon { font-size: 1.6rem; display: block; margin-bottom: 0.7rem; }
+    .tile b { display: block; color: var(--text); font-size: 1.05rem; font-weight: 600; margin-bottom: 0.3rem; }
+    .tile span { color: var(--muted); font-size: 0.9rem; font-weight: 300; }
+    .tile-badge { position: absolute; top: 1rem; right: 1rem; background: var(--gold); color: #fff; font-size: 0.75rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 10px; }
+
+    /* --- Fortschritt --- */
+    .progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1.2rem; }
+    .prog { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.4rem; text-align: center; }
+    .prog b { display: block; font-family: 'Playfair Display', serif; font-size: 2rem; color: var(--gold); line-height: 1; margin-bottom: 0.4rem; }
+    .prog span { font-size: 0.78rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+
+    .empty { background: var(--bg2); border: 1px dashed var(--border2); border-radius: 4px; padding: 2.5rem; text-align: center; color: var(--muted); font-weight: 300; }
+
+    @media (max-width: 640px) {
+        .greeting h1 { font-size: 1.8rem; }
+        .today { padding: 1.8rem; }
+        .today-left { gap: 1.2rem; }
+        .today-num { font-size: 3rem; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="greeting">
+    <h1>Hallo, <span>{{ user.username }}</span></h1>
+    <div>
+        <span class="chip">Niveau {{ level_label }}</span>
+        {% if is_premium %}
+            <span class="chip chip-gold">⭐ Premium</span>
+        {% else %}
+            <span class="chip">{{ unlocks_left }}/{{ per_day }} heute frei</span>
+        {% endif %}
+    </div>
+</div>
+
+{% if not is_premium %}
+<a class="upgrade-band {% if unlocks_left == 0 %}spent{% endif %}" href="{% url 'upgrade' %}">
+    <span>
+        {% if unlocks_left == 0 %}
+            <b>Dein Tageslimit ist erreicht.</b>
+            Schon freigeschaltete Inhalte kannst du weiterlesen — Neues gibt es ab morgen.
+        {% else %}
+            <b>Du hast heute noch {{ unlocks_left }} von {{ per_day }} {% if per_day == 1 %}Inhalt{% else %}Inhalten{% endif %} frei.</b>
+            Mit Premium liest du ohne Limit.
+        {% endif %}
+    </span>
+    <span class="upgrade-cta">⭐ Premium ansehen →</span>
+</a>
+{% endif %}
+
+{# ---------- 1. Heute dran ---------- #}
+<div class="section">
+    {% if due_count %}
+    <div class="today">
+        <div class="today-left">
+            <div class="today-num">{{ due_count }}</div>
+            <div class="today-text">
+                <h2>{% if due_count == 1 %}Wort ist fällig{% else %}Wörter sind fällig{% endif %}</h2>
+                <p>Jetzt ist der beste Zeitpunkt zum Wiederholen — später wird es schwerer.</p>
+            </div>
+        </div>
+        <div class="today-actions">
+            <a href="{% url 'flashcards' %}" class="btn">Jetzt wiederholen</a>
+        </div>
+    </div>
+    {% else %}
+    <div class="today done">
+        <div class="today-left">
+            <div class="today-num">✓</div>
+            <div class="today-text">
+                <h2>Alles erledigt</h2>
+                <p>{% if total_words %}Keine Wörter fällig. Lies einen Artikel und sammle neue.{% else %}Du hast noch keine Wörter gespeichert. Klick beim Lesen ein Wort an, um zu starten.{% endif %}</p>
+            </div>
+        </div>
+        <div class="today-actions">
+            <a href="{% url 'article_list' %}" class="btn">Artikel lesen</a>
+            {% if total_words %}<a href="{% url 'flashcards' %}" class="btn-ghost">Trotzdem üben</a>{% endif %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{# ---------- 2. Weiterlesen ---------- #}
+{% if next_article %}
+<div class="section">
+    <div class="section-head">
+        <h2>{% if next_article.is_read %}Nochmal lesen{% else %}Als Nächstes lesen{% endif %}</h2>
+        <a href="{% url 'article_list' %}">Alle Artikel →</a>
+    </div>
+    <a href="{% url 'article_detail' next_article.pk %}" class="next-card">
+        <div class="card-category">{{ next_article.get_category_display }}</div>
+        <div class="card-title">{{ next_article.title }}</div>
+        <div class="card-excerpt">{{ next_article.excerpt|truncatewords:40 }}</div>
+        <div class="card-meta">
+            <span>Für dein Niveau {{ level_label }}</span>
+            <span>{% if next_article.is_read %}<span class="read-flag">✓ Schon gelesen</span>{% else %}{{ next_article.published_at|date:"d.m.Y" }}{% endif %}</span>
+        </div>
+    </a>
+</div>
+{% else %}
+<div class="section">
+    <div class="empty">
+        Noch keine aufbereiteten Artikel für {{ level_label }}.<br>
+        Führe <code>python manage.py process_articles --all</code> aus.
+    </div>
+</div>
+{% endif %}
+
+{# ---------- 3. Weitere Artikel ---------- #}
+{% if more_articles %}
+<div class="section">
+    <div class="section-head"><h2>Weitere Artikel</h2></div>
+    <div class="articles-grid">
+        {% for article in more_articles %}
+        <a href="{% url 'article_detail' article.pk %}" class="article-card {% if article.is_read %}is-read{% endif %}">
+            <div class="card-category">{{ article.get_category_display }}</div>
+            <div class="card-title">{{ article.title }}</div>
+            <div class="card-excerpt">{{ article.excerpt|truncatewords:20 }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{# ---------- 4. Übungen ---------- #}
+<div class="section">
+    <div class="section-head"><h2>Üben</h2></div>
+    <div class="tiles">
+        <a href="{% url 'conversation_list' %}?level={{ level }}" class="tile">
+            <span class="tile-icon">💬</span>
+            <b>Gespräche</b>
+            <span>{{ conversation_count }} Dialoge auf deinem Niveau</span>
+        </a>
+        <a href="{% url 'preposition_lesson' %}" class="tile">
+            <span class="tile-icon">📌</span>
+            <b>Präpositionen</b>
+            <span>Regeln lernen und testen</span>
+        </a>
+        <a href="{% url 'nomen_verb_lesson' %}" class="tile">
+            {% if exercises_due %}<span class="tile-badge">{{ exercises_due }}</span>{% endif %}
+            <span class="tile-icon">🔗</span>
+            <b>Nomen-Verb</b>
+            <span>{% if exercises_due == 1 %}1 Übung fällig{% elif exercises_due %}{{ exercises_due }} Übungen fällig{% else %}Feste Verbindungen{% endif %}</span>
+        </a>
+        <a href="{% url 'learn_by_guessing' %}" class="tile">
+            <span class="tile-icon">🎯</span>
+            <b>Raten &amp; Lernen</b>
+            <span>Wörter im Kontext erraten</span>
+        </a>
+    </div>
+</div>
+
+{# ---------- 5. Fortschritt ---------- #}
+<div class="section">
+    <div class="section-head">
+        <h2>Dein Fortschritt</h2>
+        <a href="{% url 'saved_words' %}">Wortschatz →</a>
+    </div>
+    <div class="progress">
+        <div class="prog"><b>{{ total_words }}</b><span>Wörter</span></div>
+        <div class="prog"><b>{{ mastered }}</b><span>Gefestigt</span></div>
+        <div class="prog"><b>{{ read_count }}</b><span>Gelesen</span></div>
+        <div class="prog"><b>{% if accuracy is not None %}{{ accuracy }}%{% else %}—{% endif %}</b><span>Treffer</span></div>
+    </div>
+</div>
+{% endblock %}

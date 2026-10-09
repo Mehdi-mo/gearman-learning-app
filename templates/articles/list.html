@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block title %}Artikel — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .hero { text-align: center; padding: 4rem 0 3rem; border-bottom: 1px solid var(--border2); margin-bottom: 3rem; }
+    .hero h1 { font-family: 'Playfair Display', serif; font-size: 3.5rem; color: var(--text); line-height: 1.1; margin-bottom: 1rem; }
+    .hero h1 span { color: var(--gold); }
+    .hero p { color: var(--muted); font-size: 1.1rem; font-weight: 300; max-width: 500px; margin: 0 auto; }
+
+    .articles-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.5rem; }
+
+    .article-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.8rem; text-decoration: none; display: block; transition: border-color 0.2s, transform 0.2s; position: relative; overflow: hidden; }
+    .article-card::before { content: ''; position: absolute; top: 0; left: 0; width: 3px; height: 100%; background: var(--gold); transform: scaleY(0); transition: transform 0.2s; transform-origin: bottom; }
+    .article-card:hover { border-color: var(--border2); transform: translateY(-2px); }
+    .article-card:hover::before { transform: scaleY(1); }
+    .article-card.is-read { opacity: 0.65; }
+    .article-card.is-read::after { content: '✓ Gelesen'; position: absolute; top: 1rem; right: 1rem; font-size: 0.7rem; letter-spacing: 1px; text-transform: uppercase; color: #4caf50; border: 1px solid #4caf50; padding: 0.2rem 0.5rem; border-radius: 2px; }
+
+    .card-category { font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin-bottom: 0.8rem; }
+    .card-title { font-family: 'Playfair Display', serif; font-size: 1.25rem; color: var(--text); line-height: 1.4; margin-bottom: 1rem; }
+    .card-excerpt { color: var(--muted); font-size: 1rem; line-height: 1.6; font-weight: 300; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .card-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 1.2rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+    .card-levels { display: flex; gap: 0.3rem; }
+    .level-tag { font-size: 0.75rem; padding: 0.2rem 0.5rem; border: 1px solid var(--border2); color: var(--muted); border-radius: 2px; }
+    .card-date { font-size: 0.85rem; color: var(--muted); }
+
+    .article-card.is-locked { opacity: 0.5; }
+    .article-card.is-locked::after { content: '🔒'; position: absolute; top: 1rem; right: 1rem; font-size: 0.9rem; }
+    .quota-band { display: flex; justify-content: space-between; align-items: center; gap: 1.5rem; flex-wrap: wrap; background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px; padding: 1.1rem 1.5rem; margin-bottom: 2rem; text-decoration: none; color: var(--muted); font-weight: 300; line-height: 1.5; }
+    .quota-band:hover { border-color: var(--gold); }
+    .quota-band b { color: var(--text); font-weight: 600; }
+    .quota-band.spent { border-left-color: #c75c5c; }
+    .quota-cta { color: var(--gold); white-space: nowrap; font-size: 0.9rem; }
+
+    .empty-state { text-align: center; padding: 4rem; color: var(--muted); }
+    .empty-state h2 { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 1rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="hero">
+    <h1>Deutsch lernen mit<br><span>echten Nachrichten</span></h1>
+    <p>Lies aktuelle deutsche Artikel auf deinem Sprachniveau — von A1 bis C1.</p>
+</div>
+
+{% if needs_account %}
+<a class="quota-band" href="{% url 'register' %}">
+    <span><b>Kostenlos registrieren, um zu lesen.</b> Danach liest du jeden Tag einen Artikel oder ein Gespräch gratis.</span>
+    <span class="quota-cta">Konto erstellen →</span>
+</a>
+{% elif not is_premium %}
+<a class="quota-band {% if unlocks_left == 0 %}spent{% endif %}" href="{% url 'upgrade' %}">
+    {% if unlocks_left == 0 %}
+    <span><b>Tageslimit erreicht.</b> Bereits geöffnete Artikel bleiben lesbar — Neues gibt es ab morgen.</span>
+    {% else %}
+    <span><b>Heute noch {{ unlocks_left }} Inhalt frei.</b> Mit Premium liest du ohne Limit.</span>
+    {% endif %}
+    <span class="quota-cta">⭐ Premium ansehen →</span>
+</a>
+{% endif %}
+
+{% if articles %}
+<div class="articles-grid">
+    {% for article in articles %}
+    <a href="{% url 'article_detail' article.pk %}" class="article-card {% if article.is_read %}is-read{% endif %} {% if article.is_locked %}is-locked{% endif %}">
+        <div class="card-category">{{ article.get_category_display }}</div>
+        <div class="card-title">{{ article.title }}</div>
+        <div class="card-excerpt">{{ article.version_b1_b2|truncatewords:30 }}</div>
+        <div class="card-footer">
+            <div class="card-levels">
+                <span class="level-tag">A1/A2</span>
+                <span class="level-tag">B1/B2</span>
+                <span class="level-tag">C1</span>
+            </div>
+            <span class="card-date">{{ article.published_at|date:"d.m.Y" }}</span>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <h2>Noch keine Artikel</h2>
+    <p>Führe <code>python manage.py fetch_articles</code> aus.</p>
+</div>
+{% endif %}
+{% endblock %}

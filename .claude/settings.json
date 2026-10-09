@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$p = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if (-not $p) { Start-Process powershell.exe -ArgumentList '-NoExit', '-Command', 'Set-Location ''C:\\django_projects\\german-learning''; .\\venv\\Scripts\\Activate.ps1; python manage.py runserver' }",
+            "shell": "powershell",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

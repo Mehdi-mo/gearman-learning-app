@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}DeutschLern{% endblock %}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Source+Sans+3:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root[data-theme="dark"] {
+            --bg: #0a0a0a; --bg2: #1a1a1a; --bg3: #222;
+            --border: #2a2a2a; --border2: #333;
+            --text: #f5f2eb; --text2: #d4cfc5; --muted: #6b6b6b;
+            --gold: #c9a84c; --gold-light: #e8d5a3;
+        }
+        :root[data-theme="light"] {
+            --bg: #f7f4ee; --bg2: #ffffff; --bg3: #ede9e0;
+            --border: #ddd8cc; --border2: #ccc5b5;
+            --text: #1a1a1a; --text2: #333; --muted: #888;
+            --gold: #a07828; --gold-light: #c9a84c;
+        }
+
+        body { background: var(--bg); color: var(--text); font-family: 'Source Sans 3', sans-serif; font-size: 18px; min-height: 100vh; transition: background 0.3s, color 0.3s; }
+
+        nav { border-bottom: 1px solid var(--border2); padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--bg); z-index: 100; }
+        .nav-logo { font-family: 'Playfair Display', serif; font-size: 1.6rem; color: var(--gold); text-decoration: none; letter-spacing: 1px; }
+        .nav-logo span { color: var(--text); }
+        .nav-links { display: flex; gap: 1.4rem; align-items: center; flex-wrap: wrap; }
+        .nav-links a { color: var(--muted); text-decoration: none; font-size: 0.95rem; font-weight: 300; transition: color 0.2s; }
+        .nav-links a:hover { color: var(--gold); }
+        .nav-sep { width: 1px; height: 20px; background: var(--border2); }
+        .nav-links a.upgrade-link { color: var(--gold); }
+        .nav-links a.upgrade-link:hover { color: var(--gold-light); }
+        .premium-badge { font-size: 0.85rem; color: var(--gold); border: 1px solid var(--gold); padding: 0.15rem 0.5rem; border-radius: 2px; }
+
+        .nav-group { position: relative; }
+        .nav-group > button { background: none; border: none; color: var(--muted); font-family: inherit; font-size: 0.95rem; font-weight: 300; cursor: pointer; padding: 0; transition: color 0.2s; }
+        .nav-group > button:hover { color: var(--gold); }
+        .nav-menu { display: none; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.9rem; background: var(--bg2); border: 1px solid var(--border2); border-radius: 4px; padding: 0.5rem 0; min-width: 190px; flex-direction: column; gap: 0; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
+        .nav-group:hover .nav-menu, .nav-group:focus-within .nav-menu { display: flex; }
+        .nav-menu a { padding: 0.55rem 1.1rem; white-space: nowrap; }
+        .nav-menu a:hover { background: var(--bg3); }
+
+        .theme-toggle { background: var(--bg2); border: 1px solid var(--border2); color: var(--text); width: 36px; height: 36px; border-radius: 50%; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+        .theme-toggle:hover { border-color: var(--gold); }
+
+        .btn { background: var(--gold); color: #fff; padding: 0.5rem 1.2rem; border-radius: 2px; font-weight: 600; font-size: 0.9rem; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; transition: background 0.2s; border: none; cursor: pointer; }
+        .btn:hover { background: var(--gold-light); }
+
+        main { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .messages { list-style: none; margin-bottom: 1rem; }
+        .messages li { padding: 0.8rem 1rem; border-left: 3px solid var(--gold); background: var(--bg2); margin-bottom: 0.5rem; }
+        footer { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; border-top: 1px solid var(--border2); margin-top: 4rem; }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <nav>
+        <a href="{% url 'home' %}" class="nav-logo">Deutsch<span>Lern</span></a>
+        <div class="nav-links">
+            <a href="{% url 'article_list' %}">📰 Artikel</a>
+            <a href="{% url 'conversation_list' %}">💬 Gespräche</a>
+            <div class="nav-group">
+                <button type="button">📚 Grammatik ▾</button>
+                <div class="nav-menu">
+                    <a href="{% url 'preposition_lesson' %}">📌 Präpositionen</a>
+                    <a href="{% url 'nomen_verb_lesson' %}">🔗 Nomen-Verb</a>
+                    <a href="{% url 'learn_by_guessing' %}">🎯 Raten &amp; Lernen</a>
+                </div>
+            </div>
+            {% if user.is_authenticated %}
+                <div class="nav-sep"></div>
+                <a href="{% url 'flashcards' %}">🃏 Üben</a>
+                <a href="{% url 'saved_words' %}">💾 Gespeichert</a>
+                <a href="{% url 'read_articles' %}">📖 Gelesen</a>
+                {% if user.profile.has_premium %}
+                    <span class="premium-badge">⭐ Premium</span>
+                {% else %}
+                    <a href="{% url 'upgrade' %}" class="upgrade-link">⭐ Premium</a>
+                {% endif %}
+                {% if user.is_staff %}<a href="{% url 'control_panel' %}" style="color:var(--gold)">🛠️ Admin</a>{% endif %}
+                <a href="{% url 'settings' %}">⚙️</a>
+                <span style="color:var(--muted);font-size:0.85rem;">{{ user.username }}</span>
+                <a href="{% url 'logout' %}">Abmelden</a>
+            {% else %}
+                <a href="{% url 'login' %}">Anmelden</a>
+                <a href="{% url 'register' %}" class="btn">Registrieren</a>
+            {% endif %}
+            <button class="theme-toggle" onclick="toggleTheme()"><span id="theme-icon">☀️</span></button>
+        </div>
+    </nav>
+
+    <main>
+        {% if messages %}
+            <ul class="messages">{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>© 2026 DeutschLern — Deutsch lernen mit echten Nachrichten</footer>
+
+    <script>
+        function toggleTheme() {
+            const html = document.documentElement;
+            const next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            document.getElementById('theme-icon').textContent = next === 'dark' ? '☀️' : '🌙';
+            localStorage.setItem('theme', next);
+        }
+        const saved = localStorage.getItem('theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', saved);
+        document.getElementById('theme-icon').textContent = saved === 'dark' ? '☀️' : '🌙';
+    </script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

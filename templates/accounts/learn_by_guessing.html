@@ -1,0 +1,256 @@
+{% extends 'base.html' %}
+{% block title %}Raten & Lernen — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .page-hero { padding: 2.5rem 0 2rem; border-bottom: 1px solid var(--border2); margin-bottom: 2.5rem; }
+    .page-hero h1 { font-family: 'Playfair Display', serif; font-size: 2.8rem; margin-bottom: 0.5rem; }
+    .page-hero p { color: var(--muted); font-size: 1.05rem; max-width: 600px; }
+
+    .stats-bar { display: flex; gap: 1.5rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+    .stat-pill { background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 0.5rem 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+    .stat-pill .num { font-family: 'Playfair Display', serif; font-size: 1.2rem; color: var(--gold); }
+    .stat-pill .lbl { color: var(--muted); font-size: 0.85rem; }
+
+    .exercise-card { max-width: 680px; }
+    .progress-info { font-size: 0.85rem; color: var(--muted); margin-bottom: 1rem; }
+
+    .collocation-hint { font-size: 0.85rem; color: var(--gold); font-style: italic; margin-bottom: 1rem; }
+
+    .sentence-box { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 2rem; margin-bottom: 1.5rem; font-size: 1.3rem; line-height: 1.8; color: var(--text); }
+
+    .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 1.5rem; }
+    .option-btn { padding: 0.9rem 1.2rem; border: 1px solid var(--border2); background: var(--bg2); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 1rem; font-family: 'Source Sans 3', sans-serif; transition: all 0.2s; text-align: left; }
+    .option-btn:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); background: rgba(201,168,76,0.05); }
+    .option-btn.correct  { border-color: #4caf50; background: rgba(76,175,80,0.1);  color: #4caf50; }
+    .option-btn.wrong    { border-color: #f44336; background: rgba(244,67,54,0.1);  color: #f44336; }
+    .option-btn:disabled { cursor: default; }
+
+    .feedback-box { display: none; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 1.2rem 1.5rem; margin-bottom: 1.5rem; }
+    .feedback-box.show { display: block; }
+    .feedback-result { font-size: 1.1rem; font-weight: 600; margin-bottom: 0.5rem; }
+    .feedback-result.correct { color: #4caf50; }
+    .feedback-result.wrong   { color: #f44336; }
+    .feedback-collocation { font-size: 0.95rem; color: var(--gold); margin-bottom: 0.3rem; }
+    .feedback-explanation { font-size: 0.9rem; color: var(--muted); }
+    .feedback-interval { font-size: 0.8rem; color: var(--muted); margin-top: 0.5rem; opacity: 0.7; }
+
+    .next-btn { background: var(--gold); color: #fff; border: none; padding: 0.9rem 2rem; border-radius: 4px; font-size: 1rem; font-weight: 600; font-family: 'Source Sans 3', sans-serif; cursor: pointer; transition: background 0.2s; }
+    .next-btn:hover { background: var(--gold-light); }
+
+    .review-link { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--muted); text-decoration: none; font-size: 0.9rem; margin-top: 1.5rem; margin-left: 1rem; transition: color 0.2s; }
+    .review-link:hover { color: var(--gold); }
+
+    .empty-state { text-align: center; padding: 4rem; color: var(--muted); }
+    .empty-state h2 { font-family: 'Playfair Display', serif; font-size: 2rem; margin-bottom: 1rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-hero">
+    <h1>🎯 Raten & Lernen</h1>
+    <p>Übe Nomen-Verb-Verbindungen durch Raten. Falsche Antworten kommen öfter wieder — richtige seltener.</p>
+</div>
+
+{% if exercise %}
+
+<div class="stats-bar">
+    <div class="stat-pill"><span class="num">{{ total }}</span><span class="lbl">Übungen gesamt</span></div>
+    <div class="stat-pill"><span class="num">{{ attempted }}</span><span class="lbl">Versucht</span></div>
+    <div class="stat-pill"><span class="num">{{ correct_count }}</span><span class="lbl">✓ Richtig</span></div>
+    <div class="stat-pill"><span class="num">{{ wrong_count }}</span><span class="lbl">✗ Falsch</span></div>
+</div>
+
+<div class="exercise-card">
+
+    <div class="progress-info">
+        Übung {{ attempted|add:1 }} — falsche Antworten kommen wieder zurück!
+    </div>
+
+    {% if exercise.collocation %}
+    <div class="collocation-hint" id="collocation-hint">💡 {{ exercise.collocation }}</div>
+    {% else %}
+    <div class="collocation-hint" id="collocation-hint"></div>
+    {% endif %}
+
+    <div class="sentence-box" id="sentence-box">
+        {{ exercise.sentence }}
+    </div>
+
+    <div class="options-grid" id="options-grid">
+        {% for opt in options %}
+        <button class="option-btn"
+            onclick="submitAnswer('{{ opt|escapejs }}', this)"
+            data-option="{{ opt|escapejs }}">
+            {{ opt }}
+        </button>
+        {% endfor %}
+    </div>
+
+    <div class="feedback-box" id="feedback-box">
+        <div class="feedback-result"      id="feedback-result"></div>
+        <div class="feedback-collocation" id="feedback-collocation"></div>
+        <div class="feedback-explanation" id="feedback-explanation"></div>
+        <div class="feedback-interval"    id="feedback-interval"></div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+        <button class="next-btn" id="next-btn" onclick="loadNext()" style="display:none;">
+            Nächste Übung →
+        </button>
+        <a href="{% url 'exercise_review' %}" class="review-link">
+            📋 Meine gelösten Übungen
+        </a>
+    </div>
+
+</div>
+
+{% else %}
+<div class="empty-state">
+    <h2>Noch keine Übungen</h2>
+    <p>Führe diesen Befehl aus um Übungen zu generieren:</p>
+    <br>
+    <code>python manage.py generate_grammar_content --skip-lessons --nomen-verb-ex 20 --nomen-verb 0 --prep-exercises 0</code>
+    <br><br>
+    <a href="{% url 'nomen_verb_lesson' %}" style="color:var(--gold);">→ Nomen-Verb-Verbindungen ansehen</a>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentExerciseId = {{ exercise.pk|default:"null" }};
+let answered          = false;
+
+function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value === null || value === undefined ? '' : String(value);
+    return div.innerHTML;
+}
+
+function submitAnswer(chosen, btn) {
+    if (answered || currentExerciseId === null) return;
+    answered = true;
+
+    document.querySelectorAll('.option-btn').forEach(b => b.disabled = true);
+
+    fetch('/accounts/submit-exercise/', {
+        method:  'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken':  getCookie('csrftoken')
+        },
+        body: JSON.stringify({
+            exercise_id: currentExerciseId,
+            chosen:      chosen
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        // Highlight correct/wrong buttons
+        document.querySelectorAll('.option-btn').forEach(b => {
+            if (b.dataset.option === data.right_answer) b.classList.add('correct');
+        });
+        if (!data.correct) btn.classList.add('wrong');
+
+        // Replace ___ in sentence with the correct answer
+        const box    = document.getElementById('sentence-box');
+        const colour = data.correct ? '#4caf50' : '#f44336';
+        box.innerHTML = escapeHtml(box.textContent).replace(
+            /___/g,
+            `<span style="color:${colour};font-weight:600;border-bottom:2px solid ${colour};padding:0 4px;">${escapeHtml(data.right_answer)}</span>`
+        );
+
+        // Show feedback
+        const resultEl = document.getElementById('feedback-result');
+        resultEl.textContent  = data.correct ? '✓ Richtig!' : `✗ Falsch. Richtig: "${data.right_answer}"`;
+        resultEl.className    = 'feedback-result ' + (data.correct ? 'correct' : 'wrong');
+
+        document.getElementById('feedback-collocation').textContent  = data.collocation  ? '💡 ' + data.collocation  : '';
+        document.getElementById('feedback-explanation').textContent  = data.explanation  ? data.explanation           : '';
+        document.getElementById('feedback-interval').textContent     = data.correct
+            ? `Nächste Wiederholung in ${data.interval} Tag(en)`
+            : 'Kommt bald wieder!';
+
+        document.getElementById('feedback-box').classList.add('show');
+        document.getElementById('next-btn').style.display = 'inline-block';
+    })
+    .catch(err => console.error('Error:', err));
+}
+
+function loadNext() {
+    const btn        = document.getElementById('next-btn');
+    btn.textContent  = 'Laden...';
+    btn.disabled     = true;
+
+    fetch('/accounts/next-exercise/', {
+        method:  'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken':  getCookie('csrftoken')
+        },
+        body: JSON.stringify({ exclude_id: currentExerciseId }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.exercise) {
+            document.querySelector('.exercise-card').innerHTML = `
+                <div style="text-align:center;padding:3rem;color:var(--muted);">
+                    <div style="font-family:'Playfair Display',serif;font-size:2rem;margin-bottom:1rem;color:var(--text);">🎉 Super gemacht!</div>
+                    <p>Alle Übungen für heute erledigt. Komm morgen wieder!</p>
+                    <br>
+                    <a href="/accounts/exercise-review/" style="color:var(--gold);text-decoration:none;font-size:1rem;">📋 Ergebnisse ansehen →</a>
+                </div>
+            `;
+            return;
+        }
+
+        const ex          = data.exercise;
+        currentExerciseId = ex.id;
+        answered          = false;
+
+        // Update hint
+        const hint = document.getElementById('collocation-hint');
+        if (hint) hint.textContent = ex.collocation ? '💡 ' + ex.collocation : '';
+
+        // Update sentence
+        document.getElementById('sentence-box').textContent = ex.sentence;
+
+        // Update options
+        // Build the buttons as nodes and attach the handler directly: the old
+        // version interpolated the option text into an onclick attribute and
+        // escaped only single quotes, so a double quote broke the markup.
+        const grid = document.getElementById('options-grid');
+        grid.innerHTML = '';
+        (ex.options || []).forEach(opt => {
+            const value  = opt === null || opt === undefined ? '' : String(opt);
+            const button = document.createElement('button');
+            button.className = 'option-btn';
+            button.dataset.option = value;
+            button.textContent    = value;
+            button.addEventListener('click', () => submitAnswer(value, button));
+            grid.appendChild(button);
+        });
+
+        // Reset feedback and button
+        document.getElementById('feedback-box').classList.remove('show');
+        document.getElementById('feedback-result').textContent     = '';
+        document.getElementById('feedback-collocation').textContent = '';
+        document.getElementById('feedback-explanation').textContent = '';
+        document.getElementById('feedback-interval').textContent    = '';
+
+        btn.textContent      = 'Nächste Übung →';
+        btn.disabled         = false;
+        btn.style.display    = 'none';
+    })
+    .catch(err => console.error('Error:', err));
+}
+
+function getCookie(name) {
+    const v = `; ${document.cookie}`;
+    const p = v.split(`; ${name}=`);
+    if (p.length === 2) return p.pop().split(';').shift();
+}
+</script>
+{% endblock %}

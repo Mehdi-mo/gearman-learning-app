@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %}Premium — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .up-head { text-align: center; padding: 3rem 0 2.5rem; }
+    .up-head h1 { font-family: 'Playfair Display', serif; font-size: 2.8rem; margin-bottom: 1rem; }
+    .up-head h1 span { color: var(--gold); }
+    .up-head p { color: var(--muted); font-weight: 300; font-size: 1.1rem; max-width: 560px; margin: 0 auto; line-height: 1.7; }
+
+    .status { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px; padding: 1.5rem 1.8rem; margin-bottom: 3rem; display: flex; gap: 2.5rem; flex-wrap: wrap; }
+    .status.premium { border-left-color: #4caf50; }
+    .status div b { display: block; font-family: 'Playfair Display', serif; font-size: 1.6rem; color: var(--gold); line-height: 1; margin-bottom: 0.3rem; }
+    .status div span { font-size: 0.78rem; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); }
+
+    .plans { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 3rem; }
+    .plan { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 2.2rem; }
+    .plan.premium { border-color: var(--gold); }
+    .plan-name { font-size: 0.78rem; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.6rem; }
+    .plan.premium .plan-name { color: var(--gold); }
+    .plan-price { font-family: 'Playfair Display', serif; font-size: 2.4rem; margin-bottom: 1.5rem; }
+    .plan-price small { font-size: 0.9rem; color: var(--muted); font-family: 'Source Sans 3', sans-serif; }
+    .plan ul { list-style: none; }
+    .plan li { padding: 0.5rem 0 0.5rem 1.6rem; position: relative; color: var(--text2); font-weight: 300; line-height: 1.5; }
+    .plan li::before { content: '✓'; position: absolute; left: 0; color: var(--gold); }
+    .plan li.no { color: var(--muted); }
+    .plan li.no::before { content: '✕'; color: var(--muted); }
+    .plan .btn, .plan .btn-ghost { display: block; text-align: center; margin-top: 1.8rem; }
+    .btn-ghost { border: 1px solid var(--border2); color: var(--text2); padding: 0.5rem 1.2rem; border-radius: 2px; font-size: 0.9rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; text-decoration: none; }
+
+    .soon { background: var(--bg3); border: 1px dashed var(--border2); border-radius: 4px; padding: 1.8rem; text-align: center; color: var(--muted); font-weight: 300; line-height: 1.7; }
+    @media (max-width: 640px) { .plans { grid-template-columns: 1fr; } .up-head h1 { font-size: 2rem; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="up-head">
+    {% if is_premium %}
+        <h1>Du hast <span>Premium</span></h1>
+        <p>Unbegrenzter Zugang zu allen Artikeln, Gesprächen und Übersetzungen. Danke für deine Unterstützung!</p>
+    {% else %}
+        <h1>Lerne ohne <span>Limit</span></h1>
+        <p>Dein kostenloses Konto bleibt kostenlos. Mit Premium fällt nur das Tageslimit weg.</p>
+    {% endif %}
+</div>
+
+{% if is_premium %}
+<div class="status premium">
+    <div><b style="color:#4caf50">∞</b><span>Artikel pro Tag</span></div>
+    <div><b style="color:#4caf50">∞</b><span>Übersetzungen</span></div>
+</div>
+{% else %}
+<div class="status">
+    <div><b>{{ unlocks_left }}</b><span>von {{ per_day }} heute übrig</span></div>
+    <div><b>{{ translations_left }}</b><span>von {{ free_translations }} Übersetzungen</span></div>
+</div>
+{% endif %}
+
+<div class="plans">
+    <div class="plan">
+        <div class="plan-name">Kostenlos</div>
+        <div class="plan-price">0 €<small> / immer</small></div>
+        <ul>
+            <li>{{ per_day }} Artikel oder Gespräch pro Tag</li>
+            <li>Alle drei Niveaus (A1–C1)</li>
+            <li>Wörter speichern &amp; Karteikarten</li>
+            <li>Grammatik &amp; Übungen ohne Limit</li>
+            <li>{{ free_translations }} Übersetzungen pro Tag</li>
+            <li class="no">Unbegrenztes Lesen</li>
+        </ul>
+        {% if not is_premium %}<span class="btn-ghost">Dein aktueller Tarif</span>{% endif %}
+    </div>
+
+    <div class="plan premium">
+        <div class="plan-name">⭐ Premium</div>
+        <div class="plan-price">4,99 €<small> / Monat</small></div>
+        <ul>
+            <li><b>Unbegrenzt</b> Artikel und Gespräche</li>
+            <li>Alle drei Niveaus (A1–C1)</li>
+            <li>Wörter speichern &amp; Karteikarten</li>
+            <li>Grammatik &amp; Übungen ohne Limit</li>
+            <li><b>Unbegrenzte</b> Übersetzungen</li>
+            <li>Keine Wartezeit bis morgen</li>
+        </ul>
+        {% if is_premium %}<span class="btn-ghost">Aktiv</span>{% endif %}
+    </div>
+</div>
+
+{% if not is_premium %}
+<div class="soon">
+    <b style="color:var(--text)">Bezahlung wird gerade eingerichtet.</b><br>
+    Der Checkout ist noch nicht freigeschaltet. Premium-Zugänge werden derzeit
+    manuell vergeben — melde dich, wenn du früher dabei sein möchtest.
+</div>
+{% endif %}
+{% endblock %}

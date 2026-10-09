@@ -1,0 +1,313 @@
+{% extends 'base.html' %}
+{% block title %}{{ article.title }} — DeutschLern{% endblock %}
+
+{% block extra_css %}
+<style>
+    .back-link { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--muted); text-decoration: none; font-size: 1rem; margin-bottom: 2rem; transition: color 0.2s; }
+    .back-link:hover { color: var(--gold); }
+
+    .article-header { border-bottom: 1px solid var(--border2); padding-bottom: 2rem; margin-bottom: 2rem; }
+    .article-header-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+    .article-category { font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin-bottom: 1rem; }
+    .article-title { font-family: 'Playfair Display', serif; font-size: 2.6rem; line-height: 1.2; margin-bottom: 1rem; max-width: 750px; }
+    .article-meta { color: var(--muted); font-size: 0.95rem; }
+
+    .read-btn { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1.2rem; border-radius: 2px; cursor: pointer; font-size: 0.9rem; font-family: 'Source Sans 3', sans-serif; letter-spacing: 0.5px; transition: all 0.2s; white-space: nowrap; border: 1px solid #4caf50; color: #4caf50; background: transparent; }
+    .read-btn:hover { background: rgba(76,175,80,0.1); }
+    .read-btn.is-read { background: rgba(76,175,80,0.15); }
+    .read-btn.is-read .read-btn-text::before { content: '✓ '; }
+
+    .level-selector { display: flex; gap: 0.5rem; margin-bottom: 2.5rem; flex-wrap: wrap; }
+    .level-selector-btn { padding: 0.6rem 1.5rem; border: 1px solid var(--border2); background: transparent; color: var(--muted); border-radius: 2px; cursor: pointer; font-size: 1rem; letter-spacing: 1px; text-transform: uppercase; transition: all 0.2s; font-family: 'Source Sans 3', sans-serif; }
+    .level-selector-btn.active { background: var(--gold); border-color: var(--gold); color: #fff; font-weight: 600; }
+    .level-selector-btn:hover:not(.active) { border-color: var(--gold); color: var(--gold); }
+
+    .level-label { font-size: 0.75rem; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin-bottom: 1.2rem; }
+
+    .article-content { max-width: 700px; font-size: 1.2rem; line-height: 2; color: var(--text2); font-weight: 300; position: relative; }
+
+    .version-panel { display: none; }
+    .version-panel.active { display: block; }
+
+    /* Translation tooltip */
+    #translation-tooltip { position: fixed; background: var(--bg2); border: 1px solid var(--gold); border-radius: 6px; padding: 0.7rem 1rem; max-width: 280px; min-width: 160px; box-shadow: 0 6px 24px rgba(0,0,0,0.35); z-index: 9999; display: none; pointer-events: auto; }
+    #translation-tooltip .tt-original { font-family: 'Playfair Display', serif; font-size: 1rem; color: var(--gold); margin-bottom: 0.3rem; }
+    #translation-tooltip .tt-translation { color: var(--text); font-size: 0.95rem; line-height: 1.4; margin-bottom: 0.6rem; }
+    #translation-tooltip .tt-actions { display: flex; gap: 0.4rem; }
+    #translation-tooltip .tt-save { background: var(--gold); color: #fff; border: none; padding: 0.25rem 0.7rem; border-radius: 2px; cursor: pointer; font-size: 0.8rem; font-family: 'Source Sans 3', sans-serif; }
+    #translation-tooltip .tt-save.saved { background: #3a7a3a; }
+    #translation-tooltip .tt-close { background: transparent; border: 1px solid var(--border2); color: var(--muted); padding: 0.25rem 0.7rem; border-radius: 2px; cursor: pointer; font-size: 0.8rem; }
+
+    /* Section titles */
+    .section-title { font-family: 'Playfair Display', serif; font-size: 1.6rem; margin: 3rem 0 1.5rem; padding-top: 2rem; border-top: 1px solid var(--border2); color: var(--text); }
+
+    /* Vocab */
+    .vocab-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; max-width: 900px; }
+    .vocab-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 1.2rem 1.2rem 1.2rem 1rem; transition: border-color 0.2s; position: relative; }
+    .vocab-card:hover { border-color: var(--gold); }
+    .vocab-word { font-family: 'Playfair Display', serif; font-size: 1.25rem; color: var(--gold); margin-bottom: 0.1rem; }
+    .vocab-plural { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; font-style: italic; }
+    .vocab-translation { color: var(--text); font-size: 1rem; margin-bottom: 0.8rem; font-weight: 400; }
+    .vocab-example { color: var(--muted); font-size: 0.95rem; line-height: 1.5; font-style: italic; border-left: 2px solid var(--border2); padding-left: 0.8rem; }
+    .vocab-example-translation { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; font-style: normal; opacity: 0.7; }
+    .save-card-btn { position: absolute; top: 0.8rem; right: 0.8rem; background: transparent; border: 1px solid var(--border2); color: var(--muted); width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 0.85rem; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
+    .save-card-btn:hover, .save-card-btn.saved { border-color: var(--gold); color: var(--gold); background: rgba(201,168,76,0.1); }
+
+    /* Verbs */
+    .verbs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; max-width: 960px; }
+    .verb-card { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--gold); border-radius: 4px; padding: 1.2rem; position: relative; }
+    .verb-infinitive { font-family: 'Playfair Display', serif; font-size: 1.25rem; color: var(--gold); margin-bottom: 0.2rem; }
+    .verb-meaning { color: var(--text); font-size: 1rem; margin-bottom: 0.4rem; }
+    .verb-tense { font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.4rem; }
+    .verb-forms { font-size: 0.85rem; color: var(--muted); font-family: monospace; background: var(--bg3); padding: 0.3rem 0.6rem; border-radius: 2px; display: inline-block; margin-bottom: 0.8rem; }
+    .verb-base-example { color: var(--muted); font-size: 0.95rem; font-style: italic; border-left: 2px solid var(--border2); padding-left: 0.8rem; margin-bottom: 0.8rem; line-height: 1.5; }
+    .verb-base-example-tr { font-size: 0.85rem; font-style: normal; opacity: 0.7; margin-top: 0.2rem; }
+    .verb-prepositions { margin-top: 0.8rem; }
+    .verb-prep-title { font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); margin-bottom: 0.5rem; }
+    .verb-prep-item { background: var(--bg3); border-radius: 3px; padding: 0.6rem 0.8rem; margin-bottom: 0.5rem; }
+    .verb-prep-combo { font-size: 0.9rem; color: var(--gold); font-weight: 600; margin-bottom: 0.2rem; }
+    .verb-prep-meaning { font-size: 0.85rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .verb-prep-example { font-size: 0.9rem; color: var(--text2); font-style: italic; }
+    .verb-prep-example-tr { font-size: 0.8rem; color: var(--muted); font-style: normal; margin-top: 0.2rem; opacity: 0.7; }
+
+    .source-link { display: inline-block; margin-top: 2rem; color: var(--muted); font-size: 0.95rem; text-decoration: none; border-bottom: 1px solid var(--border2); padding-bottom: 2px; transition: color 0.2s; }
+    .source-link:hover { color: var(--gold); }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div id="translation-tooltip">
+    <div class="tt-original"    id="tt-original"></div>
+    <div class="tt-translation" id="tt-translation">…</div>
+    <div class="tt-actions">
+        <button class="tt-save" id="tt-save-btn" onclick="saveFromTooltip()">💾 Speichern</button>
+        <button class="tt-close" onclick="closeTooltip()">✕</button>
+    </div>
+</div>
+
+<a href="{% url 'article_list' %}" class="back-link">← Zurück zur Übersicht</a>
+
+<div class="article-header">
+    <div class="article-category">{{ article.get_category_display }}</div>
+    <div class="article-header-top">
+        <h1 class="article-title">{{ article.title }}</h1>
+        {% if user.is_authenticated %}
+        <button class="read-btn {% if is_read %}is-read{% endif %}" id="read-btn" onclick="toggleRead()">
+            <span>📖</span>
+            <span class="read-btn-text">{% if is_read %}Gelesen{% else %}Als gelesen markieren{% endif %}</span>
+        </button>
+        {% endif %}
+    </div>
+    <div class="article-meta">{{ article.published_at|date:"d. F Y" }}</div>
+</div>
+
+<div class="level-selector">
+    <button class="level-selector-btn {% if preferred_level == 'a1_a2' %}active{% endif %}" onclick="showLevel('a1', this)">A1 / A2</button>
+    <button class="level-selector-btn {% if preferred_level == 'b1_b2' %}active{% endif %}" onclick="showLevel('b1', this)">B1 / B2</button>
+    <button class="level-selector-btn {% if preferred_level == 'c1' %}active{% endif %}"    onclick="showLevel('c1', this)">C1</button>
+</div>
+
+{% for level_key, level_id, level_label, version, vocab_list, verbs_list in panels %}
+<div id="panel-{{ level_id }}" class="version-panel {% if preferred_level == level_key %}active{% endif %}">
+
+    <div class="level-label">{{ level_label }}</div>
+    <div class="article-content" data-level="{{ level_id }}">{{ version|linebreaksbr }}</div>
+
+    {% if vocab_list %}
+    <h2 class="section-title">📚 Wichtige Wörter</h2>
+    <div class="vocab-grid">
+        {% for word in vocab_list %}
+        <div class="vocab-card">
+            <button class="save-card-btn {% if word.word in saved_words_json %}saved{% endif %}"
+                onclick="saveWord('{{ word.word|escapejs }}','{{ word.translation|escapejs }}','{{ word.example|escapejs }}','{{ word.example_translation|escapejs }}','word',this)"
+                title="Speichern">★</button>
+            <div class="vocab-word">{{ word.word }}</div>
+            {% if word.plural %}<div class="vocab-plural">Pl: {{ word.plural }}</div>{% endif %}
+            <div class="vocab-translation">{{ word.translation }}</div>
+            <div class="vocab-example">
+                {{ word.example }}
+                <div class="vocab-example-translation">{{ word.example_translation }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if verbs_list %}
+    <h2 class="section-title">⚡ Wichtige Verben</h2>
+    <div class="verbs-grid">
+        {% for verb in verbs_list %}
+        <div class="verb-card">
+            <button class="save-card-btn {% if verb.infinitive in saved_words_json %}saved{% endif %}"
+                onclick="saveWord('{{ verb.infinitive|escapejs }}','{{ verb.meaning|escapejs }}','{{ verb.example|escapejs }}','{{ verb.example_translation|escapejs }}','verb',this)"
+                title="Speichern">★</button>
+            <div class="verb-infinitive">{{ verb.infinitive }}</div>
+            <div class="verb-meaning">{{ verb.meaning }}</div>
+            <div class="verb-tense">{{ verb.tense }}</div>
+            <div class="verb-forms">{{ verb.key_forms }}</div>
+            <div class="verb-base-example">
+                {{ verb.example }}
+                <div class="verb-base-example-tr">{{ verb.example_translation }}</div>
+            </div>
+            {% if verb.prepositions %}
+            <div class="verb-prepositions">
+                <div class="verb-prep-title">Präpositionen</div>
+                {% for prep in verb.prepositions %}
+                <div class="verb-prep-item">
+                    <div class="verb-prep-combo">{{ verb.infinitive }} + {{ prep.preposition }}</div>
+                    <div class="verb-prep-meaning">{{ prep.meaning }}</div>
+                    <div class="verb-prep-example">
+                        {{ prep.example }}
+                        <div class="verb-prep-example-tr">{{ prep.example_translation }}</div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</div>
+{% endfor %}
+
+{% if article.source_url %}
+<a href="{{ article.source_url }}" target="_blank" class="source-link">Originalartikel lesen →</a>
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+{{ saved_words_json|json_script:"saved-words-data" }}
+<script>
+const isLoggedIn = {{ user.is_authenticated|yesno:"true,false" }};
+const savedWords = new Set(JSON.parse(
+    document.getElementById('saved-words-data').textContent
+));
+const articleId  = {{ article.pk }};
+let   isRead     = {{ is_read|yesno:"true,false" }};
+let   ttWord = '', ttTranslation = '';
+
+// ── Level switcher ───────────────────────────────────────────
+function showLevel(level, btn) {
+    document.querySelectorAll('.version-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.level-selector-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('panel-' + level).classList.add('active');
+    btn.classList.add('active');
+    closeTooltip();
+}
+
+// ── Mark read ────────────────────────────────────────────────
+function toggleRead() {
+    if (!isLoggedIn) return;
+    const url = isRead ? '/accounts/mark-unread/' : '/accounts/mark-read/';
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        body: JSON.stringify({ article_id: articleId })
+    }).then(() => {
+        isRead = !isRead;
+        const btn   = document.getElementById('read-btn');
+        const label = btn.querySelector('.read-btn-text');
+        label.textContent = isRead ? 'Gelesen' : 'Als gelesen markieren';
+        btn.classList.toggle('is-read', isRead);
+    });
+}
+
+// ── Text selection → translation tooltip ────────────────────
+document.addEventListener('mouseup', function(e) {
+    if (e.target.closest('#translation-tooltip')) return;
+    const sel  = window.getSelection();
+    const text = sel.toString().trim();
+    if (text.length < 2) { closeTooltip(); return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    showTooltip(text, rect);
+});
+
+function showTooltip(text, rect) {
+    const tooltip = document.getElementById('translation-tooltip');
+    document.getElementById('tt-original').textContent    = text;
+    document.getElementById('tt-translation').textContent = '…';
+    ttWord = text; ttTranslation = '';
+    tooltip.style.display = 'block';
+    let left = rect.left, top = rect.bottom + 8;
+    if (left + 290 > window.innerWidth)  left = window.innerWidth  - 295;
+    if (top  + 120 > window.innerHeight) top  = rect.top - 130;
+    tooltip.style.left = left + 'px';
+    tooltip.style.top  = top  + 'px';
+    const saveBtn = document.getElementById('tt-save-btn');
+    saveBtn.textContent = savedWords.has(text) ? '✓ Gespeichert' : '💾 Speichern';
+    saveBtn.classList.toggle('saved', savedWords.has(text));
+    fetch('/accounts/translate/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        body: JSON.stringify({ text })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            ttTranslation = '';
+            document.getElementById('tt-translation').textContent =
+                data.message || 'Übersetzung nicht möglich.';
+            return;
+        }
+        ttTranslation = data.translation || '';
+        document.getElementById('tt-translation').textContent = ttTranslation;
+    })
+    .catch(() => {
+        document.getElementById('tt-translation').textContent = 'Fehler.';
+    });
+}
+
+function closeTooltip() {
+    document.getElementById('translation-tooltip').style.display = 'none';
+    window.getSelection().removeAllRanges();
+}
+
+function saveFromTooltip() {
+    if (!isLoggedIn) { alert('Bitte zuerst anmelden!'); return; }
+    saveWordApi(ttWord, ttTranslation, '', '', 'word');
+    savedWords.add(ttWord);
+    document.getElementById('tt-save-btn').textContent = '✓ Gespeichert';
+    document.getElementById('tt-save-btn').classList.add('saved');
+}
+
+// ── Save / unsave word cards ─────────────────────────────────
+function saveWord(word, translation, example, exampleTr, wordType, btn) {
+    if (!isLoggedIn) { alert('Bitte zuerst anmelden!'); return; }
+    if (savedWords.has(word)) {
+        fetch('/accounts/unsave-word/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify({ word })
+        }).then(() => { savedWords.delete(word); btn.classList.remove('saved'); });
+    } else {
+        saveWordApi(word, translation, example, exampleTr, wordType);
+        savedWords.add(word);
+        btn.classList.add('saved');
+    }
+}
+
+function saveWordApi(word, translation, example, exampleTr, wordType) {
+    fetch('/accounts/save-word/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        body: JSON.stringify({ word, translation, example, example_translation: exampleTr, word_type: wordType })
+    });
+}
+
+document.addEventListener('mousedown', function(e) {
+    if (!e.target.closest('#translation-tooltip') && window.getSelection().toString().trim() === '') {
+        closeTooltip();
+    }
+});
+
+function getCookie(name) {
+    const v = `; ${document.cookie}`;
+    const p = v.split(`; ${name}=`);
+    if (p.length === 2) return p.pop().split(';').shift();
+}
+</script>
+{% endblock %}
