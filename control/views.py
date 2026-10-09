@@ -38,6 +38,65 @@ def _int(value, default, minimum=1, maximum=None):
 
 STAFF = Q(is_staff=True) | Q(is_superuser=True)
 
+# Accounts grouped under "Nutzer", one chip each.
+USER_FILTERS = [
+    ('all',     'Alle'),
+    ('premium', 'Premium'),
+    ('free',    'Gratis'),
+    ('tester',  'Tester'),
+    ('staff',   'Team'),
+]
+
+
+def _active_premium(prefix=''):
+    """
+    `UserProfile.has_premium` as a database filter.
+
+    Written once here so the Nutzer chips and the header counters cannot drift
+    apart: premium on, and either no end date at all or one still in the
+    future. `prefix` lets the same rule run from the User side
+    ('profile__') as well as from UserProfile.
+    """
+    return Q(**{prefix + 'is_premium': True}) & (
+        Q(**{prefix + 'premium_until__isnull': True})
+        | Q(**{prefix + 'premium_until__gt': timezone.now()})
+    )
+
+
+# The model stores English labels ("Persian / فارسی"); the panel is German and the
+# column has to stay narrow, so the names are spelled out once here.
+LANGUAGE_DE = {
+    'en': 'Englisch', 'ar': 'Arabisch',    'fa': 'Persisch',  'tr': 'Türkisch',
+    'fr': 'Französisch', 'es': 'Spanisch', 'ru': 'Russisch', 'zh': 'Chinesisch',
+    'uk': 'Ukrainisch', 'pl': 'Polnisch', 'it': 'Italienisch',
+}
+
+
+def _user_rows(users):
+    """
+    Flatten users into plain dicts for the template.
+
+    `user.profile` raises for an account whose profile row is missing (an old
+    account, or one deleted in the admin). Resolving that in the template
+    would silently render blanks, so it is handled here instead.
+    """
+    rows = []
+    for user in users:
+        profile = getattr(user, 'profile', None)
+        rows.append({
+            'pk':          user.pk,
+            'username':    user.username,
+            'email':       user.email,
+            'level':       profile.get_preferred_level_display() if profile else '—',
+            'language':    LANGUAGE_DE.get(profile.native_language, profile.native_language) if profile else '—',
+            'label':       profile.premium_label if profile else 'Gratis',
+            'until':       profile.premium_until if profile else None,
+            'has_premium': profile.has_premium if profile else False,
+            'joined':      user.date_joined,
+            'is_staff':    user.is_staff or user.is_superuser,
+        })
+    return rows
+
 
 def _premium_counts():
     """
@@ -86,12 +145,28 @@ def panel(request):
     tab    = request.GET.get('tab', 'articles')
     status = request.GET.get('status', 'all')
     page   = _int(request.GET.get('page'), 1)
+    query  = (request.GET.get('q') or '').strip()
+    who    = request.GET.get('who', 'all')
 
     if tab == 'conversations':
         rows = Conversation.objects.all()
         level = request.GET.get('level', 'all')
         if level != 'all':
             rows = rows.filter(level=level)
+    elif tab == 'users':
+        rows = User.objects.select_related('profile').order_by('-date_joined')
+        if query:
+            rows = rows.filter(Q(username__icontains=query) | Q(email__icontains=query))
+        # 'premium' and 'free' leave the team out, matching the header
+        # counters — a premium flag on an admin account is not a customer.
+        if who == 'premium':
+            rows = rows.exclude(STAFF).filter(_active_premium('profile__'))
+        elif who == 'free':
+            rows = rows.exclude(STAFF).exclude(_active_premium('profile__'))
+        elif who == 'tester':
+            rows = rows.filter(profile__premium_kind='tester')
+        elif who == 'staff':
+            rows = rows.filter(STAFF)
     else:
         rows = Article.objects.all()
         if status == 'done':
@@ -102,6 +177,8 @@ def panel(request):
     row_total = rows.count()
     start     = (page - 1) * PAGE_SIZE
     rows      = list(rows[start:start + PAGE_SIZE])
+    if tab == 'users':
+        rows = _user_rows(rows)
 
     # Schedules, one row per job type, created on first view.
     for job, _label in JOB_CHOICES:
@@ -112,6 +189,9 @@ def panel(request):
         'tab':         tab,
         'status':      status,
         'level':       request.GET.get('level', 'all'),
+        'query':       query,
+        'who':         who,
+        'user_filters': USER_FILTERS,
         'rows':        rows,
         'row_total':   row_total,
         'page':        page,
@@ -267,6 +347,70 @@ def process_one(request):
     else:
         messages.success(request, 'Verarbeitung gestartet.')
     return redirect(request.POST.get('next') or 'control_panel')
+
+
+GRANT_DAYS = 30
+
+
+@staff_member_required
+@require_POST
+def set_premium(request):
+    """
+    Grant or revoke premium for one account from the Nutzer tab.
+
+    `is_premium` + `premium_until` stay the only thing that decides access;
+    `premium_kind` is written alongside them purely as a label.
+    """
+    user_id = (request.POST.get('user_id') or '').strip()
+    action  = request.POST.get('action', '')
+    back    = request.POST.get('next') or 'control_panel'
+
+    if not user_id.isdigit():
+        messages.error(request, 'Kein gültiges Konto ausgewählt.')
+        return redirect(back)
+
+    user = User.objects.filter(pk=int(user_id)).first()
+    if user is None:
+        messages.error(request, 'Konto nicht gefunden.')
+        return redirect(back)
+
+    profile, _ = UserProfile.objects.get_or_create(user=user)
+    now = timezone.now()
+
+    if action == 'month':
+        # Extend, never shorten. An account without an end date already has
+        # more than a month, so putting a date on it would take access away.
+        if profile.has_premium and profile.premium_until is None:
+            messages.info(request, f'{user.username} hat unbegrenzten Zugang — '
+                                   'erst „Entziehen", dann einen Monat geben.')
+            return redirect(back)
+        base = profile.premium_until if (profile.has_premium and profile.premium_until) else now
+        profile.premium_until = base + timezone.timedelta(days=GRANT_DAYS)
+        profile.is_premium    = True
+        profile.premium_kind  = 'paid'
+        note = (f'Premium für {user.username} um einen Monat verlängert — bis '
+                f'{timezone.localtime(profile.premium_until).strftime("%d.%m.%Y")}.')
+
+    elif action in ('lifetime', 'tester'):
+        profile.is_premium    = True
+        profile.premium_until = None
+        profile.premium_kind  = action
+        word = 'Tester-Zugang' if action == 'tester' else 'Unbegrenztes Premium'
+        note = f'{word} für {user.username} gesetzt.'
+
+    elif action == 'revoke':
+        profile.is_premium    = False
+        profile.premium_until = None
+        profile.premium_kind  = ''
+        note = f'Premium für {user.username} entzogen — das Konto ist ab jetzt gratis.'
+
+    else:
+        messages.error(request, 'Unbekannte Aktion.')
+        return redirect(back)
+
+    profile.save(update_fields=['is_premium', 'premium_until', 'premium_kind'])
+    messages.success(request, note)
+    return redirect(back)
 
 
 @staff_member_required

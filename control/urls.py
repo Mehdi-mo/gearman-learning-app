@@ -10,4 +10,5 @@ urlpatterns = [
     path('delete/',         views.delete_rows,   name='control_delete'),
     path('process-one/',    views.process_one,   name='control_process_one'),
     path('clear-cache/',    views.clear_cache,   name='control_clear_cache'),
+    path('user-premium/',   views.set_premium,   name='control_user_premium'),
 ]

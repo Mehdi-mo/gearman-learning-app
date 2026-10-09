@@ -33,6 +33,13 @@ class UserProfile(models.Model):
         null=True, blank=True,
         help_text='Leer lassen = unbegrenzt (z. B. für Tester oder Gratis-Zugang).'
     )
+    # Label only: `is_premium` + `premium_until` still decide access on their
+    # own, so nothing here can hand out or take away premium. It exists so a
+    # tester account is not counted as a paying customer.
+    premium_kind = models.CharField(
+        max_length=10, blank=True, default='',
+        choices=[('paid', 'Bezahlt'), ('lifetime', 'Unbegrenzt'), ('tester', 'Tester')],
+    )
 
     def __str__(self):
         return f"{self.user.username} — {self.native_language}"
@@ -43,6 +50,17 @@ class UserProfile(models.Model):
         if not self.is_premium:
             return False
         return self.premium_until is None or self.premium_until > timezone.now()
+
+    @property
+    def premium_label(self):
+        """Short German status for the admin panel."""
+        if not self.has_premium:
+            return 'Gratis'
+        if self.premium_kind == 'tester':
+            return 'Tester'
+        if self.premium_until is None:
+            return 'Unbegrenzt'
+        return 'Premium'
 
 
 class SavedWord(models.Model):
