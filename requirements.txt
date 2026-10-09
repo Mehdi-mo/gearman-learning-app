@@ -1,0 +1,14 @@
+# Direct dependencies only — pip pulls the rest in.
+# Install with:  venv\Scripts\python.exe -m pip install -r requirements.txt
+
+Django==6.0.5
+
+# AI providers used by articles/ai_processor.py (Groq first, Gemini on fallback)
+groq==1.2.0
+google-generativeai==0.8.6
+
+# NewsAPI calls in the fetch_articles job
+requests==2.34.2
+
+# Reads GROQ_API_KEY / GEMINI_API_KEY / NEWS_API_KEY out of .env
+python-dotenv==1.2.2
