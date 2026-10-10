@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import ensure_csrf_cookie
 
 from accounts import access
+from accounts import vocab_translation as vtr
 from accounts.models import ExerciseAttempt, ReadArticle, SavedWord
 
 from .models import (Article, Conversation, NomenVerbExercise,
@@ -199,26 +200,26 @@ def article_detail(request, pk):
         user=request.user, article=article
     ).exists()
 
-    panels = [
-        (
-            'a1_a2', 'a1', 'A1 / A2 — Anfänger',
-            clean_version(article.version_a1_a2, article.title),
-            article.vocab_a1_a2,
-            article.verbs_a1_a2,
-        ),
-        (
-            'b1_b2', 'b1', 'B1 / B2 — Mittelstufe',
-            clean_version(article.version_b1_b2, article.title),
-            article.vocab_b1_b2,
-            article.verbs_b1_b2,
-        ),
-        (
-            'c1', 'c1', 'C1 — Fortgeschritten',
-            clean_version(article.version_c1, article.title),
-            article.vocab_c1,
-            article.verbs_c1,
-        ),
-    ]
+    # Meanings in the reader's own language, from the shared cache. Nothing is
+    # translated here on the fly: whatever the cache does not hold is marked
+    # pending and the page asks for those few phrases once.
+    _code, target_lang = vtr.reading_language(request.user)
+
+    panels = []
+    for level_key, level_id, label, version, vocab_raw, verbs_raw in (
+        ('a1_a2', 'a1', 'A1 / A2 — Anfänger',
+         article.version_a1_a2, article.vocab_a1_a2, article.verbs_a1_a2),
+        ('b1_b2', 'b1', 'B1 / B2 — Mittelstufe',
+         article.version_b1_b2, article.vocab_b1_b2, article.verbs_b1_b2),
+        ('c1', 'c1', 'C1 — Fortgeschritten',
+         article.version_c1, article.vocab_c1, article.verbs_c1),
+    ):
+        vocab, verbs = vtr.prepare_cards(vocab_raw, verbs_raw, target_lang)
+        panels.append((
+            level_key, level_id, label,
+            clean_version(version, article.title),
+            vocab, verbs,
+        ))
 
     return render(request, 'articles/detail.html', {
         'article':          article,
@@ -293,8 +294,13 @@ def conversation_detail(request, pk):
         user=request.user, conversation=conv
     ).exists()
 
+    _code, target_lang = vtr.reading_language(request.user)
+    vocab, verbs = vtr.prepare_cards(conv.vocab, conv.verbs, target_lang)
+
     return render(request, 'articles/conversation_detail.html', {
         'conv':             conv,
+        'vocab':            vocab,
+        'verbs':            verbs,
         'native_lang':      native_lang,
         'preferred_level':  preferred_level,
         'saved_words_json': sorted(saved_words_set),

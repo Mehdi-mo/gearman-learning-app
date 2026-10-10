@@ -38,6 +38,7 @@ urlpatterns = [
     path('unsave-word/',           views.unsave_word,           name='unsave_word'),
     path('translate/',             views.translate,             name='translate'),
     path('translate-batch/',       views.translate_batch,       name='translate_batch'),
+    path('translate-texts/',       views.translate_texts,       name='translate_texts'),
     path('mark-read/',             views.mark_read,             name='mark_read'),
     path('mark-unread/',           views.mark_unread,           name='mark_unread'),
     path('read-articles/',         views.read_articles,         name='read_articles'),

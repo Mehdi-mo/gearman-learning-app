@@ -16,19 +16,22 @@ from django.views.decorators.http import require_POST
 
 from . import access
 from . import translation as tcache
+from . import vocab_translation as vtr
 from .models import LANGUAGE_CHOICES, ExerciseAttempt, ReadArticle, SavedWord
+from .vocab_translation import LANG_MAP
 
 MAX_BATCH_ITEMS = 60
 BATCH_FIELDS    = ('translation', 'meaning', 'example_translation')
 
+# Phrases per request, matched by `CHUNK` in templates/includes/vocab_translate_js.html.
+# Kept small on purpose: a batch of this many translations fits inside
+# TEXT_REPLY_TOKENS with room to spare. Sixty Persian translations ran past the
+# budget, the reply came back cut off mid-array, and the whole batch was lost.
+MAX_TEXT_ITEMS   = 25
+TEXT_REPLY_TOKENS = 3000
+
 # Quality values the flashcard buttons send: 0 = again, 1 = hard, 2 = easy.
 REVIEW_QUALITIES = (0, 1, 2)
-
-LANG_MAP = {
-    'en':'English','ar':'Arabic','fa':'Persian','tr':'Turkish',
-    'fr':'French','es':'Spanish','ru':'Russian','zh':'Chinese',
-    'uk':'Ukrainian','pl':'Polish','it':'Italian',
-}
 
 
 def _read_json(request):
@@ -48,6 +51,42 @@ def _ask_ai(prompt, max_tokens=500):
     """
     from articles.ai_processor import ask_ai
     return ask_ai(prompt, max_tokens=max_tokens, temperature=0.3)
+
+
+def _strip_code_fence(text):
+    """Pull the JSON out of a ```-fenced AI reply."""
+    text = (text or '').strip()
+    if '```' in text:
+        parts = text.split('```')
+        if len(parts) > 1:
+            text = parts[1]
+        if text.startswith('json'):
+            text = text[4:]
+    return text.strip()
+
+
+def _parse_json_array(text):
+    """
+    Read a JSON array out of an AI reply, or None if there is none to read.
+
+    A reply that ran out of tokens ends mid-array and will not parse. Throwing
+    the whole batch away would send every phrase in it back to the page as
+    English, so the complete entries before the cut are kept and the rest stay
+    pending for the next try.
+    """
+    text = _strip_code_fence(text)
+    try:
+        value = json.loads(text)
+    except ValueError:
+        # Close the array after the last entry that finished.
+        cut = text.rfind('",')
+        if cut == -1:
+            return None
+        try:
+            value = json.loads(text[:cut + 1] + ']')
+        except ValueError:
+            return None
+    return value if isinstance(value, list) else None
 
 
 class RegisterForm(forms.Form):
@@ -149,8 +188,16 @@ def settings_view(request):
 @ensure_csrf_cookie
 @login_required
 def saved_words(request):
-    words     = SavedWord.objects.filter(user=request.user)
-    due_count = words.filter(next_review__lte=timezone.now()).count()
+    words_qs  = SavedWord.objects.filter(user=request.user)
+    due_count = words_qs.filter(next_review__lte=timezone.now()).count()
+
+    # Rows the shared cache can already answer for are written down here, so
+    # every later visit is a plain read with no translation work at all.
+    words = list(words_qs)
+    lang_code, lang_name = vtr.reading_language(request.user)
+    vtr.refresh_saved_words(words, lang_code, lang_name)
+    vtr.annotate_saved_words(words, lang_code)
+
     return render(request, 'accounts/saved_words.html', {
         'words':     words,
         'due_count': due_count,
@@ -173,13 +220,19 @@ def flashcards(request):
     mastered   = all_words.filter(repetitions__gte=5, ease_factor__gte=2.5).count()
     correct_total = sum(w.times_correct for w in all_words)
     wrong_total   = sum(w.times_wrong   for w in all_words)
+
+    seed = list(due_words[:5])
+    lang_code, lang_name = vtr.reading_language(request.user)
+    vtr.refresh_saved_words(seed, lang_code, lang_name)
+    vtr.annotate_saved_words(seed, lang_code)
+
     return render(request, 'accounts/flashcards.html', {
         'due_count':     due_count,
         'total':         total,
         'mastered':      mastered,
         'correct_total': correct_total,
         'wrong_total':   wrong_total,
-        'due_words':     due_words[:5],
+        'due_words':     seed,
     })
 
 
@@ -212,6 +265,10 @@ def flashcard_review(request):
             user=request.user,
             next_review__lte=timezone.now()
         ).count()
+        if next_word:
+            lang_code, lang_name = vtr.reading_language(request.user)
+            vtr.refresh_saved_words([next_word], lang_code, lang_name)
+            vtr.annotate_saved_words([next_word], lang_code)
         return JsonResponse({
             'success':   True,
             'interval':  word.interval,
@@ -219,12 +276,18 @@ def flashcard_review(request):
             'next_word': {
                 'id':                  next_word.pk,
                 'word':                next_word.word,
-                'translation':         next_word.translation,
+                'translation':         next_word.show_translation,
                 'example':             next_word.example,
-                'example_translation': next_word.example_translation,
+                'example_translation': next_word.show_example_translation,
                 'word_type':           next_word.word_type,
                 'times_correct':       next_word.times_correct,
                 'times_wrong':         next_word.times_wrong,
+                # The card shows a spinner for these and asks for the phrase
+                # once, so a mid-session card never falls back to English.
+                'translation_pending':         next_word.translation_pending,
+                'translation_src':             next_word.translation_src,
+                'example_translation_pending': next_word.example_translation_pending,
+                'example_translation_src':     next_word.example_translation_src,
             } if next_word else None
         })
     except (SavedWord.DoesNotExist, ValueError, TypeError):
@@ -437,14 +500,34 @@ def save_word(request):
     word = (data.get('word') or '').strip()[:200]
     if not word:
         return JsonResponse({'error': 'No word'}, status=400)
+
+    defaults = {
+        'translation':         data.get('translation', ''),
+        'example':             data.get('example', ''),
+        'example_translation': data.get('example_translation', ''),
+        'word_type':           data.get('word_type', 'word'),
+    }
+
+    # A card that is already showing the learner's language sends that text
+    # along, so this word never needs translating at all. The language code is
+    # checked against the profile: a page left open after a settings change
+    # must not label Persian text as Turkish.
+    lang_code, _name = vtr.reading_language(request.user)
+    if lang_code and data.get('native_lang') == lang_code:
+        native         = (data.get('translation_native') or '').strip()
+        native_example = (data.get('example_translation_native') or '').strip()
+        # All or nothing, the same rule the cache refill uses: a row marked as
+        # done but missing its example would show that example in English for
+        # good, because nothing would ever come back to fill it.
+        needs_example = bool(defaults['example_translation'].strip()
+                             if isinstance(defaults['example_translation'], str) else False)
+        if native and (native_example or not needs_example):
+            defaults['translation_native']         = native[:200]
+            defaults['example_translation_native'] = native_example
+            defaults['native_lang']                = lang_code
+
     obj, created = SavedWord.objects.get_or_create(
-        user=request.user, word=word,
-        defaults={
-            'translation':         data.get('translation', ''),
-            'example':             data.get('example', ''),
-            'example_translation': data.get('example_translation', ''),
-            'word_type':           data.get('word_type', 'word'),
-        }
+        user=request.user, word=word, defaults=defaults
     )
     return JsonResponse({'saved': True, 'created': created})
 
@@ -584,6 +667,78 @@ Keep all German text unchanged. Return ONLY valid JSON array, no explanation.
         'from_cache':  len(items) - len(pending),
         'ai_items':    len(pending),
     })
+
+
+@require_POST
+@login_required
+def translate_texts(request):
+    """
+    Translate a list of card phrases into the reader's own language.
+
+    Anything the shared cache already knows comes back with no AI call and
+    without touching the daily limit. Only genuinely new phrases cost
+    something, and once translated they are free for every later learner.
+    """
+    data = _read_json(request)
+    if data is None:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+    texts = data.get('texts')
+    if not isinstance(texts, list):
+        return JsonResponse({'error': 'texts must be a list'}, status=400)
+
+    # Normalising here means the keys we send back match what the page asked
+    # for, and a phrase repeated across cards is only ever translated once.
+    wanted = []
+    for raw in texts:
+        if isinstance(raw, str):
+            text = tcache.normalize(raw)
+            if text and text not in wanted:
+                wanted.append(text)
+    wanted = wanted[:MAX_TEXT_ITEMS]
+
+    _code, target_lang = vtr.reading_language(request.user)
+    # An English reader has nothing to translate — the cards already show it.
+    if not wanted or not target_lang:
+        return JsonResponse({'translations': {}, 'ai_items': 0})
+
+    found   = tcache.get_many(wanted, vtr.SOURCE_LANG, target_lang)
+    pending = [t for t in wanted if t not in found]
+    if not pending:
+        return JsonResponse({'translations': found, 'ai_items': 0})
+
+    if not access.consume_translation(request.user):
+        # Hand back what was already known. The page shows the English for the
+        # rest instead of leaving a spinner turning forever.
+        return JsonResponse({
+            'error':        'limit',
+            'message':      'Tageslimit für Übersetzungen erreicht. Mit Premium unbegrenzt.',
+            'translations': found,
+        }, status=429)
+
+    prompt = (
+        f'Translate each string in this JSON array from English to {target_lang}.\n'
+        f'Return ONLY a JSON array of the same length, in the same order, '
+        f'holding just the translations.\n'
+        f'{json.dumps(pending, ensure_ascii=False)}'
+    )
+    try:
+        reply = _ask_ai(prompt, TEXT_REPLY_TOKENS)
+    except Exception:
+        # Nothing is cached from a failed call, and the page shows the English.
+        return JsonResponse({'translations': found, 'ai_items': 0})
+
+    fresh = _parse_json_array(reply)
+    if fresh is None:
+        return JsonResponse({'translations': found, 'ai_items': 0})
+
+    # zip() stops at the shorter list, so a truncated reply cannot misalign
+    # translations with the phrases they belong to.
+    for english, translated in zip(pending, fresh):
+        if isinstance(translated, str) and translated.strip():
+            found[english] = translated.strip()
+            tcache.store(english, vtr.SOURCE_LANG, target_lang, translated)
+
+    return JsonResponse({'translations': found, 'ai_items': len(pending)})
 
 
 @login_required

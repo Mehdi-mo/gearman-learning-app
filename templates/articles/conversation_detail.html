@@ -39,12 +39,6 @@
     .section-subtitle { color:var(--muted); font-size:0.9rem; margin-bottom:1.5rem; }
 
     /* Translate language selector */
-    .lang-switcher { display:flex; align-items:center; gap:0.8rem; margin-bottom:1.5rem; background:var(--bg2); border:1px solid var(--border); border-radius:4px; padding:0.7rem 1rem; max-width:420px; }
-    .lang-switcher label { font-size:0.85rem; color:var(--muted); white-space:nowrap; }
-    .lang-switcher select { background:transparent; border:none; color:var(--text); font-family:'Source Sans 3',sans-serif; font-size:0.95rem; cursor:pointer; flex:1; }
-    .lang-switcher select:focus { outline:none; }
-    .translate-btn { background:var(--gold); color:#fff; border:none; padding:0.35rem 0.8rem; border-radius:2px; cursor:pointer; font-size:0.85rem; font-family:'Source Sans 3',sans-serif; white-space:nowrap; }
-    .translate-btn:disabled { opacity:0.5; cursor:not-allowed; }
 
     /* Vocab */
     .vocab-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:1rem; max-width:900px; }
@@ -179,40 +173,33 @@
     {% endfor %}
 </div>
 
-<!-- Language switcher for dynamic translation -->
-<div class="lang-switcher">
-    <label>🌐 Übersetzungssprache:</label>
-    <select id="lang-select" onchange="onLangChange()">
-        <option value="English"   {% if native_lang == 'en' %}selected{% endif %}>English</option>
-        <option value="Persian"   {% if native_lang == 'fa' %}selected{% endif %}>Persian / فارسی</option>
-        <option value="Arabic"    {% if native_lang == 'ar' %}selected{% endif %}>Arabic / العربية</option>
-        <option value="Turkish"   {% if native_lang == 'tr' %}selected{% endif %}>Turkish / Türkçe</option>
-        <option value="French"    {% if native_lang == 'fr' %}selected{% endif %}>French / Français</option>
-        <option value="Spanish"   {% if native_lang == 'es' %}selected{% endif %}>Spanish / Español</option>
-        <option value="Russian"   {% if native_lang == 'ru' %}selected{% endif %}>Russian / Русский</option>
-        <option value="Chinese"   {% if native_lang == 'zh' %}selected{% endif %}>Chinese / 中文</option>
-        <option value="Ukrainian" {% if native_lang == 'uk' %}selected{% endif %}>Ukrainian</option>
-        <option value="Polish"    {% if native_lang == 'pl' %}selected{% endif %}>Polish</option>
-        <option value="Italian"   {% if native_lang == 'it' %}selected{% endif %}>Italian</option>
-    </select>
-    <button class="translate-btn" id="translate-btn" onclick="translateAll()">Übersetzen</button>
-</div>
-
 <!-- Vocab -->
-{% if conv.vocab %}
+{% if vocab %}
 <h2 class="section-title">📚 Wichtige Wörter</h2>
-<p class="section-subtitle">Klicke auf ★ um ein Wort zu speichern. Wähle oben eine Sprache für Übersetzungen.</p>
+<p class="section-subtitle">Klicke auf ★ um ein Wort zu speichern.</p>
 <div class="vocab-grid" id="vocab-grid">
-    {% for word in conv.vocab %}
-    <div class="vocab-card" data-index="{{ forloop.counter0 }}">
+    {% for word in vocab %}
+    <div class="vocab-card"
+         data-index="{{ forloop.counter0 }}"
+         data-word="{{ word.word }}"
+         data-word-type="word"
+         data-example="{{ word.example }}"
+         data-translation-src="{{ word.translation_src|default:word.translation }}"
+         data-example-translation-src="{{ word.example_translation_src|default:word.example_translation }}">
         <button class="save-card-btn {% if word.word in saved_words_json %}saved{% endif %}"
-            onclick="saveWord('{{ word.word|escapejs }}','{{ word.translation|escapejs }}','{{ word.example|escapejs }}','{{ word.example_translation|escapejs }}','word',this)">★</button>
+            onclick="saveWord(this)">★</button>
         <div class="vocab-word">{{ word.word }}</div>
         {% if word.plural %}<div class="vocab-plural">Pl: {{ word.plural }}</div>{% endif %}
-        <div class="vocab-translation" data-field="translation">{{ word.translation }}</div>
+        <div class="vocab-translation{% if word.translation_pending %} tr-pending{% endif %}"
+             data-native="translation" dir="auto"
+             data-src="{{ word.translation_src|default:word.translation }}"
+        >{% if not word.translation_pending %}{{ word.translation }}{% endif %}</div>
         <div class="vocab-example">
             {{ word.example }}
-            <div class="vocab-example-translation" data-field="example_translation">{{ word.example_translation }}</div>
+            <div class="vocab-example-translation{% if word.example_translation_pending %} tr-pending{% endif %}"
+                 data-native="example_translation" dir="auto"
+                 data-src="{{ word.example_translation_src|default:word.example_translation }}"
+            >{% if not word.example_translation_pending %}{{ word.example_translation }}{% endif %}</div>
         </div>
     </div>
     {% endfor %}
@@ -220,30 +207,46 @@
 {% endif %}
 
 <!-- Verbs -->
-{% if conv.verbs %}
+{% if verbs %}
 <h2 class="section-title">⚡ Wichtige Verben</h2>
 <div class="verbs-grid" id="verbs-grid">
-    {% for verb in conv.verbs %}
-    <div class="verb-card" data-index="{{ forloop.counter0 }}">
+    {% for verb in verbs %}
+    <div class="verb-card"
+         data-index="{{ forloop.counter0 }}"
+         data-word="{{ verb.infinitive }}"
+         data-word-type="verb"
+         data-example="{{ verb.example }}"
+         data-translation-src="{{ verb.meaning_src|default:verb.meaning }}"
+         data-example-translation-src="{{ verb.example_translation_src|default:verb.example_translation }}">
         <button class="save-card-btn {% if verb.infinitive in saved_words_json %}saved{% endif %}"
-            onclick="saveWord('{{ verb.infinitive|escapejs }}','{{ verb.meaning|escapejs }}','{{ verb.example|escapejs }}','{{ verb.example_translation|escapejs }}','verb',this)">★</button>
+            onclick="saveWord(this)">★</button>
         <div class="verb-infinitive">{{ verb.infinitive }}</div>
-        <div class="verb-meaning" data-field="meaning">{{ verb.meaning }}</div>
+        <div class="verb-meaning{% if verb.meaning_pending %} tr-pending{% endif %}"
+             data-native="translation" dir="auto"
+             data-src="{{ verb.meaning_src|default:verb.meaning }}"
+        >{% if not verb.meaning_pending %}{{ verb.meaning }}{% endif %}</div>
         <div class="verb-tense">{{ verb.tense }}</div>
         <div class="verb-forms">{{ verb.key_forms }}</div>
         <div class="verb-base-example">
             {{ verb.example }}
-            <div class="verb-base-example-tr" data-field="example_translation">{{ verb.example_translation }}</div>
+            <div class="verb-base-example-tr{% if verb.example_translation_pending %} tr-pending{% endif %}"
+                 data-native="example_translation" dir="auto"
+                 data-src="{{ verb.example_translation_src|default:verb.example_translation }}"
+            >{% if not verb.example_translation_pending %}{{ verb.example_translation }}{% endif %}</div>
         </div>
         {% if verb.prepositions %}
         <div class="verb-prep-title">Präpositionen</div>
         {% for prep in verb.prepositions %}
         <div class="verb-prep-item">
             <div class="verb-prep-combo">{{ verb.infinitive }} + {{ prep.preposition }}</div>
-            <div class="verb-prep-meaning" data-field="prep_meaning">{{ prep.meaning }}</div>
+            <div class="verb-prep-meaning{% if prep.meaning_pending %} tr-pending{% endif %}"
+                 dir="auto" data-src="{{ prep.meaning_src|default:prep.meaning }}"
+            >{% if not prep.meaning_pending %}{{ prep.meaning }}{% endif %}</div>
             <div class="verb-prep-example">
                 {{ prep.example }}
-                <div class="verb-prep-example-tr" data-field="prep_example_translation">{{ prep.example_translation }}</div>
+                <div class="verb-prep-example-tr{% if prep.example_translation_pending %} tr-pending{% endif %}"
+                     dir="auto" data-src="{{ prep.example_translation_src|default:prep.example_translation }}"
+                >{% if not prep.example_translation_pending %}{{ prep.example_translation }}{% endif %}</div>
             </div>
         </div>
         {% endfor %}
@@ -307,9 +310,13 @@
 {% endblock %}
 
 {% block extra_js %}
+{% include 'includes/vocab_translate_js.html' %}
 {{ saved_words_json|json_script:"saved-words-data" }}
 <script>
 const isLoggedIn  = {{ user.is_authenticated|yesno:"true,false" }};
+// Empty for English readers: their cards already hold English, so there is no
+// separate native text to store alongside it.
+const nativeLang = "{{ native_lang }}" === "en" ? "" : "{{ native_lang }}";
 const savedWords  = new Set(JSON.parse(
     document.getElementById('saved-words-data').textContent
 ));
@@ -405,84 +412,6 @@ function unhighlightLine(index) {
 // Load voices (some browsers need this)
 speechSynth.onvoiceschanged = () => { speechSynth.getVoices(); };
 
-// ── Dynamic translation ──────────────────────────────────────
-let currentLang = document.getElementById('lang-select').value;
-
-function onLangChange() {
-    currentLang = document.getElementById('lang-select').value;
-}
-
-async function translateAll() {
-    const btn = document.getElementById('translate-btn');
-    btn.disabled = true;
-    btn.textContent = 'Wird übersetzt...';
-
-    // Collect vocab items
-    const vocabCards = document.querySelectorAll('#vocab-grid .vocab-card');
-    const vocabItems = [];
-    vocabCards.forEach((card, i) => {
-        vocabItems.push({
-            _index: i,
-            translation: card.querySelector('[data-field="translation"]')?.textContent || '',
-            example_translation: card.querySelector('[data-field="example_translation"]')?.textContent || '',
-        });
-    });
-
-    // Collect verb items
-    const verbCards = document.querySelectorAll('#verbs-grid .verb-card');
-    const verbItems = [];
-    verbCards.forEach((card, i) => {
-        verbItems.push({
-            _index: i,
-            meaning: card.querySelector('[data-field="meaning"]')?.textContent || '',
-            example_translation: card.querySelector('[data-field="example_translation"]')?.textContent || '',
-        });
-    });
-
-    try {
-        if (vocabItems.length > 0) {
-            const resp = await fetch('/accounts/translate-batch/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-                body: JSON.stringify({ items: vocabItems, target_lang: currentLang })
-            });
-            const data = await resp.json();
-            if (data.translated) {
-                data.translated.forEach((item, i) => {
-                    const card = vocabCards[i];
-                    if (card) {
-                        if (item.translation) card.querySelector('[data-field="translation"]').textContent = item.translation;
-                        if (item.example_translation) card.querySelector('[data-field="example_translation"]').textContent = item.example_translation;
-                    }
-                });
-            }
-        }
-
-        if (verbItems.length > 0) {
-            const resp = await fetch('/accounts/translate-batch/', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-                body: JSON.stringify({ items: verbItems, target_lang: currentLang })
-            });
-            const data = await resp.json();
-            if (data.translated) {
-                data.translated.forEach((item, i) => {
-                    const card = verbCards[i];
-                    if (card) {
-                        if (item.meaning) card.querySelector('[data-field="meaning"]').textContent = item.meaning;
-                        if (item.example_translation) card.querySelector('[data-field="example_translation"]').textContent = item.example_translation;
-                    }
-                });
-            }
-        }
-    } catch(e) {
-        console.error('Translation error:', e);
-    }
-
-    btn.disabled    = false;
-    btn.textContent = 'Übersetzen';
-}
-
 // ── Quiz ─────────────────────────────────────────────────────
 let answers    = {};
 let answered   = {};
@@ -573,31 +502,65 @@ function closeTooltip() {
 
 function saveFromTooltip() {
     if (!isLoggedIn) { alert('Bitte zuerst anmelden!'); return; }
-    saveWordApi(ttWord, ttTranslation, '', '', 'word');
+    // The tooltip translates German straight into the reader's language, so
+    // this word has no English version. Storing the same text in both columns
+    // keeps the card readable and stops the refill translating it to itself.
+    saveWordApi({
+        word:                       ttWord,
+        translation:                ttTranslation,
+        example:                    '',
+        example_translation:        '',
+        word_type:                  'word',
+        translation_native:         nativeLang ? ttTranslation : '',
+        example_translation_native: '',
+        native_lang:                nativeLang,
+    });
     savedWords.add(ttWord);
     document.getElementById('tt-save-btn').textContent = '✓ Gespeichert';
     document.getElementById('tt-save-btn').classList.add('saved');
 }
 
-function saveWord(word, translation, example, exampleTr, wordType, btn) {
+function saveWord(btn) {
     if (!isLoggedIn) { alert('Bitte zuerst anmelden!'); return; }
+    const card = btn.closest('[data-word]');
+    const word = card.dataset.word;
+
     if (savedWords.has(word)) {
         fetch('/accounts/unsave-word/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
             body: JSON.stringify({ word })
         }).then(() => { savedWords.delete(word); btn.classList.remove('saved'); });
-    } else {
-        saveWordApi(word, translation, example, exampleTr, wordType);
-        savedWords.add(word); btn.classList.add('saved');
+        return;
     }
+
+    // A card still waiting on a phrase hands over no native text at all —
+    // a half-filled row would show that half in English for good.
+    const waiting = card.querySelector('.tr-pending') !== null;
+    const shown   = sel => {
+        const el = card.querySelector(sel);
+        return el ? el.textContent.trim() : '';
+    };
+
+    saveWordApi({
+        word:                word,
+        translation:         card.dataset.translationSrc || '',
+        example:             card.dataset.example || '',
+        example_translation: card.dataset.exampleTranslationSrc || '',
+        word_type:           card.dataset.wordType || 'word',
+        translation_native:         waiting ? '' : shown('[data-native="translation"]'),
+        example_translation_native: waiting ? '' : shown('[data-native="example_translation"]'),
+        native_lang:                waiting ? '' : nativeLang,
+    });
+    savedWords.add(word);
+    btn.classList.add('saved');
 }
 
-function saveWordApi(word, translation, example, exampleTr, wordType) {
+function saveWordApi(payload) {
     fetch('/accounts/save-word/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
-        body: JSON.stringify({ word, translation, example, example_translation: exampleTr, word_type: wordType })
+        body: JSON.stringify(payload)
     });
 }
 

@@ -72,6 +72,15 @@ class SavedWord(models.Model):
     word_type           = models.CharField(max_length=20, default='word')
     saved_at            = models.DateTimeField(auto_now_add=True)
 
+    # The same meaning in the learner's own language. `translation` above keeps
+    # the English: it is short and clean, so a learner who later switches
+    # language gets English -> X rather than a translation of a translation.
+    # `native_lang` says which language the two columns below are in, and a row
+    # whose `native_lang` no longer matches the profile is simply refilled.
+    translation_native         = models.CharField(max_length=200, blank=True, default='')
+    example_translation_native = models.TextField(blank=True, default='')
+    native_lang                = models.CharField(max_length=5, blank=True, default='')
+
     # Spaced repetition fields
     ease_factor   = models.FloatField(default=2.5)
     interval      = models.IntegerField(default=1)

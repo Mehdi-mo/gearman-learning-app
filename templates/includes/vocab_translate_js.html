@@ -1,0 +1,83 @@
+{% comment %}
+Fills in the card meanings the server could not answer from the shared cache.
+
+The server renders every phrase it already knows, so on most pages this script
+finds nothing to do and makes no request at all. What it does find is marked
+`.tr-pending`, carries the English in `data-src`, and shows a small spinner
+until its own language arrives. If the request fails or the daily limit is
+used up, the element falls back to the English rather than spinning forever.
+{% endcomment %}
+<style>
+    .tr-pending { display: inline-block; min-height: 1em; }
+    .tr-pending::before {
+        content: ''; display: inline-block; width: 0.8em; height: 0.8em;
+        border: 2px solid var(--border2); border-top-color: var(--gold);
+        border-radius: 50%; animation: tr-spin 0.7s linear infinite;
+        vertical-align: -0.05em;
+    }
+    @keyframes tr-spin { to { transform: rotate(360deg); } }
+</style>
+<script>
+(function () {
+    // Phrases per request, matching MAX_TEXT_ITEMS in accounts/views.py. A
+    // larger batch risks a reply that runs out of tokens mid-way, so a long
+    // list goes up as several requests instead of one that comes back cut off.
+    const CHUNK = 25;
+
+    function cookie(name) {
+        const parts = `; ${document.cookie}`.split(`; ${name}=`);
+        if (parts.length === 2) return parts.pop().split(';').shift();
+        return '';
+    }
+
+    // Must match accounts.translation.normalize, or the keys coming back would
+    // not line up with the phrases we asked about.
+    function normalize(text) {
+        return (text || '').trim().replace(/\s+/g, ' ');
+    }
+
+    async function translatePhrases(texts) {
+        const wanted = [...new Set(texts.map(normalize).filter(Boolean))];
+        const found  = {};
+        for (let i = 0; i < wanted.length; i += CHUNK) {
+            try {
+                const resp = await fetch('/accounts/translate-texts/', {
+                    method:  'POST',
+                    headers: { 'Content-Type': 'application/json',
+                               'X-CSRFToken': cookie('csrftoken') },
+                    body:    JSON.stringify({ texts: wanted.slice(i, i + CHUNK) })
+                });
+                const data = await resp.json();
+                Object.assign(found, data.translations || {});
+                // Out of quota: keep what came back, stop asking for more.
+                if (data.error === 'limit') break;
+            } catch (e) {
+                break;
+            }
+        }
+        return found;
+    }
+
+    async function translatePending(root) {
+        const scope = root || document;
+        const nodes = Array.from(scope.querySelectorAll('.tr-pending'));
+        // A caller can hand over the waiting element itself, not a container.
+        if (scope !== document && scope.classList && scope.classList.contains('tr-pending')) {
+            nodes.unshift(scope);
+        }
+        if (!nodes.length) return;
+
+        const found = await translatePhrases(nodes.map(n => n.dataset.src || ''));
+        nodes.forEach(node => {
+            const src = normalize(node.dataset.src || '');
+            node.textContent = found[src] || src;
+            node.classList.remove('tr-pending');
+        });
+    }
+
+    window.translatePhrases = translatePhrases;
+    window.translatePending = translatePending;
+
+    document.addEventListener('DOMContentLoaded', () => translatePending());
+})();
+</script>

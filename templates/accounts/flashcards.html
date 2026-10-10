@@ -145,7 +145,9 @@
     {% for w in due_words %}
     <li class="preview-item">
         <span class="word">{{ w.word }}</span>
-        <span class="tr">{{ w.translation }}</span>
+        <span class="tr{% if w.translation_pending %} tr-pending{% endif %}"
+              dir="auto" data-src="{{ w.translation_src }}"
+        >{% if not w.translation_pending %}{{ w.show_translation }}{% endif %}</span>
     </li>
     {% endfor %}
 </ul>
@@ -213,19 +215,26 @@
 {% endblock %}
 
 {% block extra_js %}
+{% include 'includes/vocab_translate_js.html' %}
 <script>
-// Due words passed from Django
+// Due words passed from Django. `translation` and `example_translation` are
+// already in the reader's language where the shared cache knew them; the
+// `_pending` pair marks the few the card has to ask for itself.
 const dueWords = [
     {% for w in due_words %}
     {
         id:          {{ w.pk }},
         word:        "{{ w.word|escapejs }}",
-        translation: "{{ w.translation|escapejs }}",
+        translation: "{{ w.show_translation|escapejs }}",
         example:     "{{ w.example|escapejs }}",
-        example_translation: "{{ w.example_translation|escapejs }}",
+        example_translation: "{{ w.show_example_translation|escapejs }}",
         word_type:   "{{ w.word_type }}",
         times_correct: {{ w.times_correct }},
         times_wrong:   {{ w.times_wrong }},
+        translation_pending:         {{ w.translation_pending|yesno:"true,false" }},
+        translation_src:             "{{ w.translation_src|escapejs }}",
+        example_translation_pending: {{ w.example_translation_pending|yesno:"true,false" }},
+        example_translation_src:     "{{ w.example_translation_src|escapejs }}",
     },
     {% endfor %}
 ];
@@ -268,16 +277,43 @@ function showCard(word) {
     // Fill card content
     document.getElementById('card-type').textContent        = word.word_type === 'verb' ? '⚡ Verb' : '📚 Wort';
     document.getElementById('card-word').textContent        = word.word;
-    document.getElementById('card-translation').textContent = word.translation;
     document.getElementById('card-example-text').textContent = word.example || '';
-    document.getElementById('card-example-tr').textContent   = word.example_translation || '';
     document.getElementById('stat-correct').textContent      = `✓ ${word.times_correct}`;
     document.getElementById('stat-wrong').textContent        = `✗ ${word.times_wrong}`;
+
+    answerField('card-translation', word.translation, word.translation_pending,
+                word.translation_src);
+    answerField('card-example-tr', word.example_translation,
+                word.example_translation_pending, word.example_translation_src);
+    fillPendingAnswers(word);
 
     // Hide example section if no example
     document.getElementById('card-example').style.display = word.example ? 'block' : 'none';
 
     updateProgress();
+}
+
+// One answer line. A phrase nobody has translated into this language yet shows
+// a spinner and carries its English in data-src for the request below.
+function answerField(elId, text, pending, src) {
+    const el = document.getElementById(elId);
+    el.classList.toggle('tr-pending', !!pending);
+    el.dataset.src   = src || '';
+    el.textContent   = pending ? '' : (text || '');
+}
+
+function fillPendingAnswers(word) {
+    if (!word.translation_pending && !word.example_translation_pending) return;
+    // Both lines sit inside #card-answer, so they go up as one request.
+    translatePending(document.getElementById('card-answer')).then(() => {
+        // Rating "Nochmal" shows this card again later in the session, so keep
+        // what came back on the word itself rather than asking a second time.
+        if (currentWord !== word) return;
+        word.translation         = document.getElementById('card-translation').textContent;
+        word.example_translation = document.getElementById('card-example-tr').textContent;
+        word.translation_pending = false;
+        word.example_translation_pending = false;
+    });
 }
 
 function revealAnswer() {

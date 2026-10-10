@@ -75,12 +75,16 @@
         <button class="remove-btn" onclick="removeWord('{{ w.word|escapejs }}', {{ w.pk }})" title="Entfernen">✕</button>
         <div class="word-badge">{% if w.word_type == 'verb' %}⚡ Verb{% else %}📚 Wort{% endif %}</div>
         <div class="word-main">{{ w.word }}</div>
-        <div class="word-meaning">{{ w.translation }}</div>
+        <div class="word-meaning{% if w.translation_pending %} tr-pending{% endif %}"
+             dir="auto" data-src="{{ w.translation_src }}"
+        >{% if not w.translation_pending %}{{ w.show_translation }}{% endif %}</div>
         {% if w.example %}
         <div class="word-example">
             {{ w.example }}
-            {% if w.example_translation %}
-            <div class="word-example-translation">{{ w.example_translation }}</div>
+            {% if w.show_example_translation or w.example_translation_pending %}
+            <div class="word-example-translation{% if w.example_translation_pending %} tr-pending{% endif %}"
+                 dir="auto" data-src="{{ w.example_translation_src }}"
+            >{% if not w.example_translation_pending %}{{ w.show_example_translation }}{% endif %}</div>
             {% endif %}
         </div>
         {% endif %}
@@ -98,6 +102,7 @@
 {% endblock %}
 
 {% block extra_js %}
+{% include 'includes/vocab_translate_js.html' %}
 <script>
     function filterWords(type, btn) {
         document.querySelectorAll('.filter-tab').forEach(b => b.classList.remove('active'));

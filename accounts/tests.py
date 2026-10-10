@@ -19,7 +19,9 @@ from articles.models import Article, Conversation
 
 from . import access
 from . import translation as tcache
-from .models import ContentUnlock, DailyUsage, SavedWord, TranslationCache, UserProfile
+from . import vocab_translation as vtr
+from .models import (LANGUAGE_CHOICES, ContentUnlock, DailyUsage, SavedWord,
+                     TranslationCache, UserProfile)
 
 LOCMEM_EMAIL = 'django.core.mail.backends.locmem.EmailBackend'
 
@@ -1239,3 +1241,1111 @@ class FlashcardReviewQualityTests(TestCase):
                                      {'word_id': self.word.pk, 'quality': quality})
                 self.assertEqual(response.status_code, 200)
                 self.assertTrue(response.json()['success'])
+
+
+# ---------------------------------------------------------------------------
+# Cards in the learner's own language — accounts.vocab_translation
+#
+# English is what the content pipeline stores; these helpers turn it into the
+# learner's language out of the shared cache, so a phrase is only ever paid
+# for once for the whole site.
+# ---------------------------------------------------------------------------
+
+def patch_ai(return_value='[]'):
+    """
+    Every provider call in this feature goes through accounts.views._ask_ai,
+    so patching it here is enough to keep Groq and Gemini out of the tests.
+    """
+    from unittest.mock import patch
+    return patch('accounts.views._ask_ai', return_value=return_value)
+
+
+def patch_lookup():
+    """Counts shared-cache lookups without changing what they answer."""
+    from unittest.mock import patch
+    return patch('accounts.vocab_translation.tcache.get_many',
+                 side_effect=tcache.get_many)
+
+
+def vocab_card(**overrides):
+    """One vocab card shaped the way the content pipeline writes them."""
+    card = {
+        'word':                'das Haus',
+        'plural':              'die Häuser',
+        'translation':         'house',
+        'example':             'Das Haus ist alt.',
+        'example_translation': 'The house is old.',
+    }
+    card.update(overrides)
+    return card
+
+
+def verb_card(**overrides):
+    """One verb card, including the nested preposition entries."""
+    card = {
+        'verb':                'anfangen',
+        'meaning':             'to begin',
+        'example':             'Wir fangen an.',
+        'example_translation': 'We are beginning.',
+        'prepositions': [{
+            'preposition':         'mit + Dativ',
+            'meaning':             'to begin with',
+            'example':             'Er fängt mit der Arbeit an.',
+            'example_translation': 'He begins with the work.',
+        }],
+    }
+    card.update(overrides)
+    return card
+
+
+class ReadingLanguageTests(TestCase):
+    """Which language a learner's cards should be rendered in, if any."""
+
+    def test_a_foreign_profile_gives_its_code_and_name(self):
+        user = make_user(username='perser', native_language='fa')
+        self.assertEqual(vtr.reading_language(user), ('fa', 'Persian'))
+
+    def test_an_english_profile_asks_for_nothing(self):
+        # The stored text is already English: nothing to look up, nothing to
+        # spend, and no spinner on the page.
+        user = make_user(username='englisch', native_language='en')
+        self.assertEqual(vtr.reading_language(user), (None, None))
+
+    def test_a_blank_language_asks_for_nothing(self):
+        user = make_user(username='leer')
+        UserProfile.objects.filter(user=user).update(native_language='')
+        self.assertEqual(vtr.reading_language(User.objects.get(pk=user.pk)),
+                         (None, None))
+
+    def test_an_unknown_language_code_asks_for_nothing(self):
+        # A code with no name would otherwise end up in an AI prompt.
+        user = make_user(username='exotisch')
+        UserProfile.objects.filter(user=user).update(native_language='xx')
+        self.assertEqual(vtr.reading_language(User.objects.get(pk=user.pk)),
+                         (None, None))
+
+    def test_a_user_without_a_profile_asks_for_nothing(self):
+        user = make_user(username='profillos2', native_language='fa')
+        UserProfile.objects.filter(user=user).delete()
+        self.assertEqual(vtr.reading_language(User.objects.get(pk=user.pk)),
+                         (None, None))
+
+    def test_an_anonymous_visitor_asks_for_nothing(self):
+        self.assertEqual(vtr.reading_language(AnonymousUser()), (None, None))
+
+    def test_every_language_the_settings_page_offers_has_a_name(self):
+        for code, _label in LANGUAGE_CHOICES:
+            with self.subTest(code=code):
+                self.assertTrue(code == vtr.SOURCE_LANG or code in vtr.LANG_MAP)
+
+
+class PrepareCardsTests(TestCase):
+    """Vocab and verb lists filled in from the cache before the page renders."""
+
+    def test_without_a_target_language_the_lists_come_back_untouched(self):
+        vocab, verbs = vtr.prepare_cards([vocab_card()], [verb_card()], None)
+        self.assertEqual(vocab[0], vocab_card())
+        self.assertEqual(verbs[0], verb_card())
+        # No companion keys either, so an English page shows no spinner.
+        self.assertNotIn('translation_src', vocab[0])
+        self.assertNotIn('translation_pending', vocab[0])
+
+    def test_blank_lists_are_handled(self):
+        self.assertEqual(vtr.prepare_cards(None, None, 'Persian'), ([], []))
+        self.assertEqual(vtr.prepare_cards([], [], None), ([], []))
+
+    def test_cached_vocab_fields_are_rendered_immediately(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        tcache.store('The house is old.', 'en', 'Persian', 'خانه قدیمی است.')
+
+        vocab, _verbs = vtr.prepare_cards([vocab_card()], [], 'Persian')
+
+        card = vocab[0]
+        self.assertEqual(card['translation'], 'خانه')
+        self.assertEqual(card['example_translation'], 'خانه قدیمی است.')
+        # The English stays available for the save button and a later switch.
+        self.assertEqual(card['translation_src'], 'house')
+        self.assertEqual(card['example_translation_src'], 'The house is old.')
+        self.assertNotIn('translation_pending', card)
+        self.assertNotIn('example_translation_pending', card)
+        # German is never translated.
+        self.assertEqual(card['word'], 'das Haus')
+        self.assertEqual(card['example'], 'Das Haus ist alt.')
+
+    def test_a_cache_miss_is_marked_pending_and_keeps_the_english(self):
+        vocab, _verbs = vtr.prepare_cards([vocab_card()], [], 'Persian')
+
+        card = vocab[0]
+        self.assertTrue(card['translation_pending'])
+        self.assertTrue(card['example_translation_pending'])
+        self.assertEqual(card['translation_src'], 'house')
+        self.assertEqual(card['translation'], 'house')
+
+    def test_one_field_cached_and_one_missing(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+
+        vocab, _verbs = vtr.prepare_cards([vocab_card()], [], 'Persian')
+
+        card = vocab[0]
+        self.assertEqual(card['translation'], 'خانه')
+        self.assertNotIn('translation_pending', card)
+        self.assertTrue(card['example_translation_pending'])
+
+    def test_verb_fields_and_nested_prepositions_are_translated(self):
+        for english, native in (('to begin', 'شروع کردن'),
+                                ('We are beginning.', 'ما شروع می کنیم.'),
+                                ('to begin with', 'شروع کردن با'),
+                                ('He begins with the work.', 'او کار را شروع می کند.')):
+            tcache.store(english, 'en', 'Persian', native)
+
+        _vocab, verbs = vtr.prepare_cards([], [verb_card()], 'Persian')
+
+        verb = verbs[0]
+        self.assertEqual(verb['meaning'], 'شروع کردن')
+        self.assertEqual(verb['example_translation'], 'ما شروع می کنیم.')
+        self.assertEqual(verb['meaning_src'], 'to begin')
+        prep = verb['prepositions'][0]
+        self.assertEqual(prep['meaning'], 'شروع کردن با')
+        self.assertEqual(prep['example_translation'], 'او کار را شروع می کند.')
+        self.assertEqual(prep['meaning_src'], 'to begin with')
+        # The preposition itself is German.
+        self.assertEqual(prep['preposition'], 'mit + Dativ')
+
+    def test_the_source_lists_are_never_modified(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        original_vocab = [vocab_card()]
+        original_verbs = [verb_card()]
+
+        vtr.prepare_cards(original_vocab, original_verbs, 'Persian')
+
+        # A translated card written back would poison the Article row it came
+        # from, so the copies have to be deep ones.
+        self.assertEqual(original_vocab, [vocab_card()])
+        self.assertEqual(original_verbs, [verb_card()])
+
+    def test_blank_and_non_string_fields_are_skipped(self):
+        cards = [vocab_card(translation='   ', example_translation=None)]
+
+        vocab, _verbs = vtr.prepare_cards(cards, [], 'Persian')
+
+        card = vocab[0]
+        self.assertNotIn('translation_src', card)
+        self.assertNotIn('translation_pending', card)
+        self.assertNotIn('example_translation_pending', card)
+
+    def test_junk_entries_do_not_break_the_page(self):
+        vocab, verbs = vtr.prepare_cards(
+            ['kein Wörterbuch', None],
+            [verb_card(prepositions='keine Liste'), 42],
+            'Persian',
+        )
+        self.assertEqual(len(vocab), 2)
+        self.assertTrue(verbs[0]['meaning_pending'])
+
+    def test_extra_whitespace_still_hits_the_cache(self):
+        # The cache normalises whitespace, and so must the lookup key.
+        tcache.store('the house is old.', 'en', 'Persian', 'خانه قدیمی است.')
+
+        vocab, _verbs = vtr.prepare_cards(
+            [vocab_card(translation='the   house  is\n old.')], [], 'Persian')
+
+        self.assertEqual(vocab[0]['translation'], 'خانه قدیمی است.')
+
+    def test_a_whole_page_of_cards_costs_one_lookup(self):
+        cards = [vocab_card(word=f'Wort {i}', translation=f'word {i}')
+                 for i in range(25)]
+
+        with patch_lookup() as lookup:
+            vtr.prepare_cards(cards, [verb_card()], 'Persian')
+
+        self.assertEqual(lookup.call_count, 1)
+
+    def test_another_language_does_not_see_this_ones_translations(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+
+        vocab, _verbs = vtr.prepare_cards([vocab_card()], [], 'Turkish')
+
+        self.assertTrue(vocab[0]['translation_pending'])
+        self.assertEqual(vocab[0]['translation_src'], 'house')
+
+
+# ---------------------------------------------------------------------------
+# Saved words in the learner's own language
+# ---------------------------------------------------------------------------
+
+class RefreshSavedWordsTests(TestCase):
+    """
+    Native columns are filled from the shared cache only — one query, one
+    write, never an AI call. A row is written only when everything it needs
+    is there, so a half-known row is retried instead of being stuck in
+    English for good.
+    """
+
+    def setUp(self):
+        self.user = make_user(username='sparer', native_language='fa')
+
+    def saved(self, **overrides):
+        fields = {
+            'word':                'das Haus',
+            'translation':         'house',
+            'example':             'Das Haus ist alt.',
+            'example_translation': 'The house is old.',
+        }
+        fields.update(overrides)
+        return SavedWord.objects.create(user=self.user, **fields)
+
+    def cache_the_house(self, target='Persian'):
+        tcache.store('house', 'en', target, 'خانه')
+        tcache.store('The house is old.', 'en', target, 'خانه قدیمی است.')
+
+    def test_a_fully_cached_row_is_written_once_and_for_all(self):
+        word = self.saved()
+        self.cache_the_house()
+
+        with patch_ai() as ai:
+            vtr.refresh_saved_words([word], 'fa', 'Persian')
+
+        ai.assert_not_called()
+        word.refresh_from_db()
+        self.assertEqual(word.translation_native, 'خانه')
+        self.assertEqual(word.example_translation_native, 'خانه قدیمی است.')
+        self.assertEqual(word.native_lang, 'fa')
+        # The English is the source for a later language switch — never lost.
+        self.assertEqual(word.translation, 'house')
+        self.assertEqual(word.example_translation, 'The house is old.')
+
+    def test_a_row_whose_example_is_missing_is_not_written_at_all(self):
+        word = self.saved()
+        tcache.store('house', 'en', 'Persian', 'خانه')      # only half of it
+
+        vtr.refresh_saved_words([word], 'fa', 'Persian')
+
+        word.refresh_from_db()
+        # All or nothing: a row marked done with a missing example would show
+        # that example in English for ever, because nothing refills it.
+        self.assertEqual(word.native_lang, '')
+        self.assertEqual(word.translation_native, '')
+        self.assertEqual(word.example_translation_native, '')
+
+    def test_a_row_without_an_example_only_needs_its_translation(self):
+        word = self.saved(example='', example_translation='')
+        tcache.store('house', 'en', 'Persian', 'خانه')
+
+        vtr.refresh_saved_words([word], 'fa', 'Persian')
+
+        word.refresh_from_db()
+        self.assertEqual(word.native_lang, 'fa')
+        self.assertEqual(word.translation_native, 'خانه')
+        self.assertEqual(word.example_translation_native, '')
+
+    def test_a_row_that_is_already_in_this_language_is_left_alone(self):
+        word = self.saved(translation_native='خانه',
+                          example_translation_native='خانه قدیمی است.',
+                          native_lang='fa')
+        tcache.store('house', 'en', 'Persian', 'ETWAS ANDERES')
+
+        with patch_lookup() as lookup:
+            vtr.refresh_saved_words([word], 'fa', 'Persian')
+
+        # Nothing was even looked up: a word saved with its own translation
+        # never costs anything again.
+        lookup.assert_not_called()
+        word.refresh_from_db()
+        self.assertEqual(word.translation_native, 'خانه')
+
+    def test_switching_language_translates_the_english_not_the_old_language(self):
+        word = self.saved(translation_native='خانه',
+                          example_translation_native='خانه قدیمی است.',
+                          native_lang='fa')
+        tcache.store('house', 'en', 'Turkish', 'ev')
+        tcache.store('The house is old.', 'en', 'Turkish', 'Ev eski.')
+        # Would only ever be used if the Persian text were the source.
+        tcache.store('خانه', 'en', 'Turkish', 'FALSCH')
+
+        vtr.refresh_saved_words([word], 'tr', 'Turkish')
+
+        word.refresh_from_db()
+        self.assertEqual(word.translation_native, 'ev')
+        self.assertEqual(word.example_translation_native, 'Ev eski.')
+        self.assertEqual(word.native_lang, 'tr')
+
+    def test_an_english_reader_is_a_no_op(self):
+        word = self.saved()
+        self.cache_the_house()
+
+        with patch_lookup() as lookup:
+            vtr.refresh_saved_words([word], None, None)
+
+        lookup.assert_not_called()
+        word.refresh_from_db()
+        self.assertEqual(word.native_lang, '')
+
+    def test_an_empty_word_list_is_a_no_op(self):
+        with patch_lookup() as lookup:
+            vtr.refresh_saved_words([], 'fa', 'Persian')
+        lookup.assert_not_called()
+
+    def test_a_translation_longer_than_the_column_is_cut_to_fit(self):
+        word = self.saved(example='', example_translation='')
+        tcache.store('house', 'en', 'Persian', 'خ' * 400)
+
+        vtr.refresh_saved_words([word], 'fa', 'Persian')
+
+        word.refresh_from_db()
+        self.assertEqual(len(word.translation_native), 200)
+
+    def test_only_the_rows_the_cache_knows_are_written(self):
+        known   = self.saved(word='das Haus')
+        unknown = self.saved(word='der Baum', translation='tree',
+                             example_translation='The tree is tall.')
+        self.cache_the_house()
+
+        vtr.refresh_saved_words([known, unknown], 'fa', 'Persian')
+
+        known.refresh_from_db()
+        unknown.refresh_from_db()
+        self.assertEqual(known.native_lang, 'fa')
+        self.assertEqual(unknown.native_lang, '')
+
+    def test_many_words_are_looked_up_in_chunks(self):
+        rows = SavedWord.objects.bulk_create([
+            SavedWord(user=self.user, word=f'Wort {i}', translation=f'word {i}',
+                      example_translation=f'Sentence {i}.')
+            for i in range(vtr.LOOKUP_CHUNK + 20)
+        ])
+        for i in range(vtr.LOOKUP_CHUNK + 20):
+            tcache.store(f'word {i}', 'en', 'Persian', f'کلمه {i}')
+            tcache.store(f'Sentence {i}.', 'en', 'Persian', f'جمله {i}.')
+
+        words = list(SavedWord.objects.filter(pk__in=[r.pk for r in rows]))
+        with patch_lookup() as lookup:
+            vtr.refresh_saved_words(words, 'fa', 'Persian')
+
+        # Each row contributes two parameters, so the lookup is split rather
+        # than sent as one huge IN (...).
+        self.assertEqual(lookup.call_count, 2)
+        self.assertEqual(
+            SavedWord.objects.filter(user=self.user, native_lang='fa').count(),
+            vtr.LOOKUP_CHUNK + 20)
+
+
+class AnnotateSavedWordsTests(TestCase):
+    """
+    What the saved-word and flashcard templates actually read. The English is
+    always the fallback, so a failed or rationed translation leaves a
+    readable page rather than a blank one.
+    """
+
+    def setUp(self):
+        self.user = make_user(username='anmerker', native_language='fa')
+        self.word = SavedWord.objects.create(
+            user=self.user, word='das Haus', translation='house',
+            example='Das Haus ist alt.', example_translation='The house is old.')
+
+    def test_a_ready_row_shows_its_native_text(self):
+        self.word.translation_native         = 'خانه'
+        self.word.example_translation_native = 'خانه قدیمی است.'
+        self.word.native_lang                = 'fa'
+
+        vtr.annotate_saved_words([self.word], 'fa')
+
+        self.assertEqual(self.word.show_translation, 'خانه')
+        self.assertEqual(self.word.show_example_translation, 'خانه قدیمی است.')
+        self.assertFalse(self.word.translation_pending)
+        self.assertFalse(self.word.example_translation_pending)
+        self.assertEqual(self.word.translation_src, 'house')
+
+    def test_a_row_that_is_not_ready_yet_shows_the_english_and_asks(self):
+        vtr.annotate_saved_words([self.word], 'fa')
+
+        self.assertEqual(self.word.show_translation, 'house')
+        self.assertEqual(self.word.show_example_translation, 'The house is old.')
+        self.assertTrue(self.word.translation_pending)
+        self.assertTrue(self.word.example_translation_pending)
+        self.assertEqual(self.word.translation_src, 'house')
+        self.assertEqual(self.word.example_translation_src, 'The house is old.')
+
+    def test_an_english_reader_is_never_pending(self):
+        vtr.annotate_saved_words([self.word], None)
+
+        self.assertEqual(self.word.show_translation, 'house')
+        self.assertFalse(self.word.translation_pending)
+        self.assertFalse(self.word.example_translation_pending)
+
+    def test_a_row_left_in_the_previous_language_is_re_asked(self):
+        self.word.translation_native = 'خانه'
+        self.word.native_lang        = 'fa'
+
+        vtr.annotate_saved_words([self.word], 'tr')
+
+        # Persian text must not be shown to a Turkish reader.
+        self.assertEqual(self.word.show_translation, 'house')
+        self.assertTrue(self.word.translation_pending)
+
+    def test_a_blank_english_field_is_not_asked_about(self):
+        self.word.example            = ''
+        self.word.example_translation = ''
+
+        vtr.annotate_saved_words([self.word], 'fa')
+
+        self.assertEqual(self.word.show_example_translation, '')
+        self.assertFalse(self.word.example_translation_pending)
+        self.assertTrue(self.word.translation_pending)
+
+    def test_a_ready_row_with_a_blank_native_field_falls_back(self):
+        # Belt and braces: the all-or-nothing rule should prevent this, but
+        # if it happens the English shows rather than an empty line.
+        self.word.translation_native = 'خانه'
+        self.word.native_lang        = 'fa'
+
+        vtr.annotate_saved_words([self.word], 'fa')
+
+        self.assertEqual(self.word.show_translation, 'خانه')
+        self.assertEqual(self.word.show_example_translation, 'The house is old.')
+
+
+# ---------------------------------------------------------------------------
+# POST /accounts/translate-texts/ — the phrases the server could not answer
+# ---------------------------------------------------------------------------
+
+class TranslateTextsViewTests(TestCase):
+    """
+    The one endpoint the card pages call. Anything the shared cache knows is
+    free; only genuinely new phrases cost a call, and they are free for
+    everyone afterwards.
+    """
+    url = '/accounts/translate-texts/'
+
+    def setUp(self):
+        self.user = make_user(username='fragender', native_language='fa')
+        self.client.force_login(self.user)
+
+    def test_login_required(self):
+        self.client.logout()
+        response = post_json(self.client, self.url, {'texts': ['house']})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/accounts/login/', response['Location'])
+
+    def test_get_is_not_allowed(self):
+        self.assertEqual(self.client.get(self.url).status_code, 405)
+
+    def test_broken_json_answers_400(self):
+        response = self.client.post(self.url, data='{not json',
+                                    content_type='application/json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()['error'], 'Invalid JSON')
+
+    def test_texts_that_is_not_a_list_answers_400(self):
+        for payload in ({'texts': 'house'}, {'texts': {'a': 'b'}}, {}):
+            with self.subTest(payload=payload):
+                response = post_json(self.client, self.url, payload)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()['error'], 'texts must be a list')
+
+    def test_an_english_reader_costs_nothing(self):
+        self.user.profile.native_language = 'en'
+        self.user.profile.save()
+
+        with patch_ai() as ai:
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['translations'], {})
+        ai.assert_not_called()
+        self.assertEqual(translations_used(self.user), 0)
+        self.assertEqual(TranslationCache.objects.count(), 0)
+
+    def test_a_warm_cache_costs_no_ai_call(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        tcache.store('tree', 'en', 'Persian', 'درخت')
+
+        with patch_ai() as ai:
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        data = response.json()
+        ai.assert_not_called()
+        self.assertEqual(data['ai_items'], 0)
+        self.assertEqual(data['translations'], {'house': 'خانه', 'tree': 'درخت'})
+        self.assertEqual(translations_used(self.user), 0)
+
+    def test_blank_and_non_string_entries_are_dropped(self):
+        with patch_ai() as ai:
+            response = post_json(self.client, self.url,
+                                 {'texts': ['', '   ', 7, None]})
+
+        self.assertEqual(response.json(), {'translations': {}, 'ai_items': 0})
+        ai.assert_not_called()
+
+    def test_a_miss_is_translated_once_and_cached_for_everyone(self):
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+
+        with patch_ai(fresh) as ai:
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        data = response.json()
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(data['ai_items'], 1)
+        self.assertEqual(data['translations'], {'house': 'خانه'})
+        self.assertEqual(translations_used(self.user), 1)
+        self.assertEqual(tcache.get('house', 'en', 'Persian'), 'خانه')
+        # The prompt says which language, and carries the phrase itself.
+        prompt = ai.call_args[0][0]
+        self.assertIn('Persian', prompt)
+        self.assertIn('house', prompt)
+
+    def test_a_second_learner_pays_nothing_for_the_same_phrase(self):
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+        with patch_ai(fresh):
+            post_json(self.client, self.url, {'texts': ['house']})
+
+        other = make_user(username='zweiter', native_language='fa')
+        self.client.force_login(other)
+        with patch_ai(fresh) as ai:
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        ai.assert_not_called()
+        self.assertEqual(response.json()['translations'], {'house': 'خانه'})
+        self.assertEqual(translations_used(other), 0)
+
+    def test_only_the_unknown_phrases_go_to_the_ai(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        fresh = json.dumps(['درخت'], ensure_ascii=False)
+
+        with patch_ai(fresh) as ai:
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        data = response.json()
+        self.assertEqual(data['ai_items'], 1)
+        self.assertEqual(data['translations'], {'house': 'خانه', 'tree': 'درخت'})
+        self.assertNotIn('house', ai.call_args[0][0])
+
+    def test_repeated_phrases_are_asked_about_once(self):
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+
+        with patch_ai(fresh) as ai:
+            response = post_json(self.client, self.url, {
+                'texts': ['the  house', ' the house ', 'the house'],
+            })
+
+        data = response.json()
+        self.assertEqual(data['ai_items'], 1)
+        # The key is the normalised phrase, which is what the page asks with.
+        self.assertEqual(data['translations'], {'the house': 'خانه'})
+        self.assertEqual(json.loads(ai.call_args[0][0].split('\n')[-1]),
+                         ['the house'])
+
+    def test_the_request_is_capped(self):
+        from accounts.views import MAX_TEXT_ITEMS
+        texts = [f'word {i}' for i in range(MAX_TEXT_ITEMS + 10)]
+        fresh = json.dumps([f'کلمه {i}' for i in range(MAX_TEXT_ITEMS)],
+                           ensure_ascii=False)
+
+        with patch_ai(fresh):
+            response = post_json(self.client, self.url, {'texts': texts})
+
+        translations = response.json()['translations']
+        self.assertEqual(len(translations), MAX_TEXT_ITEMS)
+        self.assertIn('word 0', translations)
+        self.assertNotIn(f'word {MAX_TEXT_ITEMS + 5}', translations)
+
+    def test_over_the_daily_limit_the_english_still_shows(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        DailyUsage.objects.create(user=self.user, date=timezone.localdate(),
+                                  translations=access.FREE_TRANSLATIONS_PER_DAY)
+
+        with patch_ai() as ai:
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        data = response.json()
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(data['error'], 'limit')
+        ai.assert_not_called()
+        # What was known still comes back, so the page is not left spinning;
+        # the rest falls back to the English it is already showing.
+        self.assertEqual(data['translations'], {'house': 'خانه'})
+
+    def test_a_premium_reader_is_not_capped(self):
+        self.user.profile.is_premium = True
+        self.user.profile.save()
+        DailyUsage.objects.create(user=self.user, date=timezone.localdate(),
+                                  translations=access.FREE_TRANSLATIONS_PER_DAY)
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+
+        with patch_ai(fresh) as ai:
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(response.json()['translations'], {'house': 'خانه'})
+
+    def test_a_reply_that_is_not_json_leaves_the_english_in_place(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+
+        with patch_ai('Hier ist deine Übersetzung!') as ai:
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        data = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(data['ai_items'], 0)
+        self.assertEqual(data['translations'], {'house': 'خانه'})
+        # Junk is never written to the shared cache.
+        self.assertEqual(TranslationCache.objects.count(), 1)
+
+    def test_a_reply_that_is_not_a_list_leaves_the_english_in_place(self):
+        with patch_ai('{"house": "خانه"}') as ai:
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {'translations': {}, 'ai_items': 0})
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(TranslationCache.objects.count(), 0)
+
+    def test_a_provider_error_leaves_the_english_in_place(self):
+        from unittest.mock import patch
+        tcache.store('house', 'en', 'Persian', 'خانه')
+
+        with patch('accounts.views._ask_ai', side_effect=RuntimeError('down')):
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['translations'], {'house': 'خانه'})
+
+    def test_a_truncated_reply_does_not_shift_the_phrases(self):
+        # One translation for three phrases: it must land on the first one.
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+
+        with patch_ai(fresh):
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree', 'car']})
+
+        translations = response.json()['translations']
+        self.assertEqual(translations, {'house': 'خانه'})
+        self.assertEqual(tcache.get('house', 'en', 'Persian'), 'خانه')
+        self.assertIsNone(tcache.get('tree', 'en', 'Persian'))
+        self.assertIsNone(tcache.get('car', 'en', 'Persian'))
+
+    def test_blank_entries_in_the_reply_are_ignored(self):
+        fresh = json.dumps(['', 'درخت'], ensure_ascii=False)
+
+        with patch_ai(fresh):
+            response = post_json(self.client, self.url,
+                                 {'texts': ['house', 'tree']})
+
+        self.assertEqual(response.json()['translations'], {'tree': 'درخت'})
+        self.assertIsNone(tcache.get('house', 'en', 'Persian'))
+
+    def test_a_code_fenced_reply_is_still_read(self):
+        fresh = '```json\n' + json.dumps(['خانه'], ensure_ascii=False) + '\n```'
+
+        with patch_ai(fresh):
+            response = post_json(self.client, self.url, {'texts': ['house']})
+
+        self.assertEqual(response.json()['translations'], {'house': 'خانه'})
+
+    def test_the_reply_is_stored_under_the_readers_language_only(self):
+        fresh = json.dumps(['خانه'], ensure_ascii=False)
+
+        with patch_ai(fresh):
+            post_json(self.client, self.url, {'texts': ['house']})
+
+        self.assertEqual(tcache.get('house', 'en', 'Persian'), 'خانه')
+        self.assertIsNone(tcache.get('house', 'en', 'Turkish'))
+        self.assertIsNone(tcache.get('house', 'de', 'Persian'))
+
+
+# ---------------------------------------------------------------------------
+# save_word taking the native text the card already shows
+# ---------------------------------------------------------------------------
+
+class SaveWordNativeTextTests(TestCase):
+    """
+    A card that is already showing Persian sends that text along, so the word
+    never has to be translated again. The language code is checked against
+    the profile, and the pair has to be complete.
+    """
+    url = '/accounts/save-word/'
+
+    def setUp(self):
+        self.user = make_user(username='sammler', native_language='fa')
+        self.client.force_login(self.user)
+
+    def payload(self, **overrides):
+        data = {
+            'word':                        'das Haus',
+            'translation':                 'house',
+            'example':                     'Das Haus ist alt.',
+            'example_translation':          'The house is old.',
+            'translation_native':          'خانه',
+            'example_translation_native':  'خانه قدیمی است.',
+            'native_lang':                 'fa',
+        }
+        data.update(overrides)
+        return data
+
+    def test_a_complete_pair_is_stored(self):
+        response = post_json(self.client, self.url, self.payload())
+
+        self.assertEqual(response.json(), {'saved': True, 'created': True})
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.translation_native, 'خانه')
+        self.assertEqual(word.example_translation_native, 'خانه قدیمی است.')
+        self.assertEqual(word.native_lang, 'fa')
+        # The English columns keep the English.
+        self.assertEqual(word.translation, 'house')
+        self.assertEqual(word.example_translation, 'The house is old.')
+
+    def test_a_word_saved_with_its_native_text_is_never_looked_up_again(self):
+        post_json(self.client, self.url, self.payload())
+
+        with patch_lookup() as lookup, patch_ai() as ai:
+            response = self.client.get('/accounts/saved/')
+
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_not_called()
+        ai.assert_not_called()
+        self.assertContains(response, 'خانه')
+
+    def test_a_language_code_that_does_not_match_the_profile_is_refused(self):
+        # A page left open across a settings change must not label Persian
+        # text as Turkish.
+        post_json(self.client, self.url, self.payload(native_lang='tr'))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.native_lang, '')
+        self.assertEqual(word.translation_native, '')
+        self.assertEqual(word.translation, 'house')
+
+    def test_an_english_reader_stores_no_native_text(self):
+        self.user.profile.native_language = 'en'
+        self.user.profile.save()
+
+        post_json(self.client, self.url, self.payload(native_lang='en'))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.native_lang, '')
+        self.assertEqual(word.translation_native, '')
+
+    def test_a_missing_native_example_blocks_the_whole_row(self):
+        # Stored as done, the English example would never be refilled.
+        post_json(self.client, self.url,
+                  self.payload(example_translation_native=''))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.native_lang, '')
+        self.assertEqual(word.translation_native, '')
+
+    def test_a_card_without_an_english_example_needs_no_native_example(self):
+        post_json(self.client, self.url, self.payload(
+            example='', example_translation='', example_translation_native=''))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.native_lang, 'fa')
+        self.assertEqual(word.translation_native, 'خانه')
+        self.assertEqual(word.example_translation_native, '')
+
+    def test_a_missing_native_translation_blocks_the_row(self):
+        post_json(self.client, self.url, self.payload(translation_native='   '))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.native_lang, '')
+
+    def test_a_native_translation_longer_than_the_column_is_cut_to_fit(self):
+        post_json(self.client, self.url,
+                  self.payload(translation_native='خ' * 400))
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(len(word.translation_native), 200)
+        self.assertEqual(word.native_lang, 'fa')
+
+    def test_a_card_that_sends_no_native_text_still_saves(self):
+        post_json(self.client, self.url,
+                  {'word': 'das Haus', 'translation': 'house'})
+
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.translation, 'house')
+        self.assertEqual(word.native_lang, '')
+
+
+# ---------------------------------------------------------------------------
+# The saved-word and flashcard pages
+# ---------------------------------------------------------------------------
+
+class SavedWordsPageLanguageTests(TestCase):
+    """
+    The page renders everything the cache knows and marks the rest pending;
+    nothing is translated while rendering, whatever the profile says.
+    """
+
+    def setUp(self):
+        self.user = make_user(username='seitenleser', native_language='fa')
+        self.client.force_login(self.user)
+        self.word = SavedWord.objects.create(
+            user=self.user, word='das Haus', translation='house',
+            example='Das Haus ist alt.', example_translation='The house is old.')
+
+    def warm_cache(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        tcache.store('The house is old.', 'en', 'Persian', 'خانه قدیمی است.')
+
+    def test_a_warm_cache_renders_the_native_text_and_records_it(self):
+        self.warm_cache()
+
+        with patch_ai() as ai:
+            response = self.client.get('/accounts/saved/')
+
+        ai.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'خانه')
+        self.assertNotContains(response, 'class="word-meaning tr-pending"')
+        # Written down, so the next visit is a plain read.
+        self.word.refresh_from_db()
+        self.assertEqual(self.word.native_lang, 'fa')
+        self.assertEqual(self.word.translation_native, 'خانه')
+
+    def test_the_second_visit_needs_no_lookup_at_all(self):
+        self.warm_cache()
+        self.client.get('/accounts/saved/')
+
+        with patch_lookup() as lookup:
+            response = self.client.get('/accounts/saved/')
+
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_not_called()
+
+    def test_a_cold_cache_marks_the_row_pending_and_carries_the_english(self):
+        with patch_ai() as ai:
+            response = self.client.get('/accounts/saved/')
+
+        ai.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'class="word-meaning tr-pending"')
+        self.assertContains(response, 'data-src="house"')
+        # Nothing is written while the row is only half known.
+        self.word.refresh_from_db()
+        self.assertEqual(self.word.native_lang, '')
+
+    def test_an_english_reader_sees_the_english_with_no_spinner(self):
+        self.user.profile.native_language = 'en'
+        self.user.profile.save()
+
+        with patch_lookup() as lookup, patch_ai() as ai:
+            response = self.client.get('/accounts/saved/')
+
+        self.assertEqual(response.status_code, 200)
+        lookup.assert_not_called()
+        ai.assert_not_called()
+        self.assertContains(response, 'house')
+        self.assertNotContains(response, 'class="word-meaning tr-pending"')
+
+    def test_the_page_carries_the_script_that_asks_for_the_rest(self):
+        response = self.client.get('/accounts/saved/')
+        self.assertContains(response, '/accounts/translate-texts/')
+
+    def test_a_stale_language_is_refilled_from_the_english(self):
+        SavedWord.objects.filter(pk=self.word.pk).update(
+            translation_native='ev', example_translation_native='Ev eski.',
+            native_lang='tr')
+        self.warm_cache()
+
+        response = self.client.get('/accounts/saved/')
+
+        self.assertContains(response, 'خانه')
+        self.assertNotContains(response, 'Ev eski.')
+        self.word.refresh_from_db()
+        self.assertEqual(self.word.native_lang, 'fa')
+
+
+class FlashcardPageLanguageTests(TestCase):
+    """The same rules on the flashcard page and its review endpoint."""
+
+    def setUp(self):
+        self.user = make_user(username='karteileser', native_language='fa')
+        self.client.force_login(self.user)
+        self.word = SavedWord.objects.create(
+            user=self.user, word='das Haus', translation='house',
+            example='Das Haus ist alt.', example_translation='The house is old.')
+
+    def warm_cache(self):
+        tcache.store('house', 'en', 'Persian', 'خانه')
+        tcache.store('The house is old.', 'en', 'Persian', 'خانه قدیمی است.')
+
+    def test_a_warm_cache_renders_the_native_text(self):
+        self.warm_cache()
+
+        with patch_ai() as ai:
+            response = self.client.get('/accounts/flashcards/')
+
+        ai.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'خانه')
+        self.assertNotContains(response, 'class="tr tr-pending"')
+
+    def test_a_cold_cache_marks_the_card_pending(self):
+        with patch_ai() as ai:
+            response = self.client.get('/accounts/flashcards/')
+
+        ai.assert_not_called()
+        self.assertContains(response, 'class="tr tr-pending"')
+        self.assertContains(response, 'translation_src:             "house"')
+
+    def test_an_english_reader_gets_no_spinner(self):
+        self.user.profile.native_language = 'en'
+        self.user.profile.save()
+
+        with patch_lookup() as lookup:
+            response = self.client.get('/accounts/flashcards/')
+
+        lookup.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'translation_pending:         false')
+
+    def test_the_review_payload_carries_the_native_text(self):
+        self.warm_cache()
+        other = SavedWord.objects.create(user=self.user, word='der Baum',
+                                         translation='tree')
+        tcache.store('tree', 'en', 'Persian', 'درخت')
+
+        with patch_ai() as ai:
+            data = post_json(self.client, '/accounts/flashcard-review/',
+                             {'word_id': self.word.pk, 'quality': 2}).json()
+
+        ai.assert_not_called()
+        card = data['next_word']
+        self.assertEqual(card['id'], other.pk)
+        self.assertEqual(card['translation'], 'درخت')
+        self.assertFalse(card['translation_pending'])
+        self.assertEqual(card['translation_src'], 'tree')
+
+    def test_the_review_payload_falls_back_to_the_english_and_asks(self):
+        other = SavedWord.objects.create(
+            user=self.user, word='der Baum', translation='tree',
+            example='Der Baum ist hoch.', example_translation='The tree is tall.')
+
+        with patch_ai() as ai:
+            data = post_json(self.client, '/accounts/flashcard-review/',
+                             {'word_id': self.word.pk, 'quality': 2}).json()
+
+        ai.assert_not_called()
+        card = data['next_word']
+        self.assertEqual(card['id'], other.pk)
+        # English rather than a blank card, plus everything the card needs to
+        # ask for its own translation.
+        self.assertEqual(card['translation'], 'tree')
+        self.assertTrue(card['translation_pending'])
+        self.assertEqual(card['translation_src'], 'tree')
+        self.assertTrue(card['example_translation_pending'])
+        self.assertEqual(card['example_translation_src'], 'The tree is tall.')
+
+    def test_the_review_payload_for_an_english_reader_is_never_pending(self):
+        self.user.profile.native_language = 'en'
+        self.user.profile.save()
+        SavedWord.objects.create(user=self.user, word='der Baum',
+                                 translation='tree')
+
+        data = post_json(self.client, '/accounts/flashcard-review/',
+                         {'word_id': self.word.pk, 'quality': 2}).json()
+
+        card = data['next_word']
+        self.assertEqual(card['translation'], 'tree')
+        self.assertFalse(card['translation_pending'])
+        self.assertFalse(card['example_translation_pending'])
+
+
+# ---------------------------------------------------------------------------
+# A phrase is paid for once for the whole site
+# ---------------------------------------------------------------------------
+
+class TranslationIsPaidForOnceTests(TestCase):
+    """
+    The point of the feature: one AI call per phrase, ever. What one page
+    asks for, every other page and every other learner gets for free.
+    """
+
+    def setUp(self):
+        self.user = make_user(username='erster', native_language='fa')
+        self.client.force_login(self.user)
+        self.fresh = json.dumps(['خانه', 'خانه قدیمی است.'], ensure_ascii=False)
+
+    def ask_for_the_house(self):
+        return post_json(self.client, '/accounts/translate-texts/',
+                         {'texts': ['house', 'The house is old.']})
+
+    def test_what_a_card_page_asked_for_fills_the_saved_word_for_free(self):
+        SavedWord.objects.create(
+            user=self.user, word='das Haus', translation='house',
+            example='Das Haus ist alt.', example_translation='The house is old.')
+
+        with patch_ai(self.fresh) as ai:
+            self.ask_for_the_house()
+        self.assertEqual(ai.call_count, 1)
+
+        with patch_ai() as ai:
+            response = self.client.get('/accounts/saved/')
+
+        ai.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        word = SavedWord.objects.get(user=self.user)
+        self.assertEqual(word.translation_native, 'خانه')
+        self.assertEqual(word.example_translation_native, 'خانه قدیمی است.')
+        self.assertEqual(word.native_lang, 'fa')
+        # One call for everything: the page, the row and every later visit.
+        self.assertEqual(translations_used(self.user), 1)
+
+    def test_a_later_learner_in_the_same_language_pays_nothing(self):
+        with patch_ai(self.fresh):
+            self.ask_for_the_house()
+
+        later = make_user(username='spaeter', native_language='fa')
+        SavedWord.objects.create(
+            user=later, word='das Haus', translation='house',
+            example='Das Haus ist alt.', example_translation='The house is old.')
+        self.client.force_login(later)
+
+        with patch_ai() as ai, patch_lookup() as lookup:
+            response = self.client.get('/accounts/saved/')
+
+        ai.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(lookup.call_count, 1)        # one query, no call
+        self.assertEqual(translations_used(later), 0)
+        self.assertEqual(SavedWord.objects.get(user=later).translation_native,
+                         'خانه')
+
+    def test_the_same_phrase_in_another_language_is_a_separate_purchase(self):
+        with patch_ai(self.fresh):
+            self.ask_for_the_house()
+
+        turk = make_user(username='tuerke', native_language='tr')
+        self.client.force_login(turk)
+        with patch_ai(json.dumps(['ev', 'Ev eski.'])) as ai:
+            response = self.client.post(
+                '/accounts/translate-texts/',
+                data=json.dumps({'texts': ['house', 'The house is old.']}),
+                content_type='application/json')
+
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(response.json()['translations']['house'], 'ev')
+        # Neither language overwrote the other.
+        self.assertEqual(tcache.get('house', 'en', 'Persian'), 'خانه')
+        self.assertEqual(tcache.get('house', 'en', 'Turkish'), 'ev')
+
+    def test_the_page_script_and_the_endpoint_agree_on_the_chunk_size(self):
+        # If the script asked for more phrases per request than the endpoint
+        # accepts, the extra ones would be silently dropped and spin forever.
+        from django.template.loader import get_template
+
+        from accounts.views import MAX_TEXT_ITEMS
+
+        with open(get_template('includes/vocab_translate_js.html').origin.name,
+                  encoding='utf-8') as handle:
+            source = handle.read()
+
+        match = re.search(r'const CHUNK = (\d+)', source)
+        self.assertIsNotNone(match)
+        self.assertEqual(int(match.group(1)), MAX_TEXT_ITEMS)
