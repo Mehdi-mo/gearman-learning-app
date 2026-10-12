@@ -117,6 +117,12 @@
         <span style="font-size:0.82rem;color:var(--muted)">≈ 45 Sek. pro Artikel ({{ counts.articles_waiting }} warten)</span>
     </form>
 
+    <form method="post" action="{% url 'control_recheck' %}" class="runrow">{% csrf_token %}
+        <label>Alle Artikel prüfen</label>
+        <button class="btn-sm" type="submit" onclick="return confirm('Alle Artikel prüfen? Unvollständige werden auf „wartet“ zurückgesetzt.')">Prüfen</button>
+        <span style="font-size:0.82rem;color:var(--muted)">Setzt den Status gerade — ohne KI, nur fertig/wartet</span>
+    </form>
+
     <form method="post" action="{% url 'control_run' %}" class="runrow">{% csrf_token %}
         <input type="hidden" name="job" value="generate_conversations">
         <label>Gespräche erstellen</label>

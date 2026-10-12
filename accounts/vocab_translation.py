@@ -11,7 +11,7 @@ English is always the source language. That is what the content pipeline
 generates, and keeping the English means a learner who later switches from
 Persian to Turkish gets English -> Turkish rather than Persian -> Turkish.
 """
-import copy
+from articles import cards
 
 from . import translation as tcache
 
@@ -85,11 +85,12 @@ def prepare_cards(vocab_list, verbs_list, target_lang):
     — and `<field>_pending` marks what the cache did not know, which is what
     the page then asks for.
 
-    The lists are deep-copied, so a translated card can never be written back
-    onto the Article or Conversation row it came from.
+    Every card also comes back holding each key its template reads, blank
+    where the AI left a gap: `cards.fill_blanks` does that and the deep copy
+    in one go, so a translated card can never be written back onto the Article
+    or Conversation row it came from.
     """
-    vocab = copy.deepcopy(list(vocab_list or []))
-    verbs = copy.deepcopy(list(verbs_list or []))
+    vocab, verbs = cards.fill_blanks(vocab_list, verbs_list)
     if not target_lang:
         return vocab, verbs
 

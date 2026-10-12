@@ -15,10 +15,16 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from accounts.models import UserProfile
-from articles.models import Article
+from articles.models import Article, Conversation
+# The same builder the articles suite uses for a finished article, so both
+# suites agree on what "complete" looks like.
+from accounts.tests import verb_card, vocab_card
+from articles.tests import BROKEN_VERB, card_without, complete_article
 
-from .models import JOB_CHOICES, Schedule
-from .views import _counts, _user_rows, GRANT_DAYS, PAGE_SIZE, USER_FILTERS
+from .jobs import generate_conversations, missing_parts, process_articles
+from .models import JOB_CHOICES, JobRun, Schedule
+from .views import (_counts, _user_rows, GRANT_DAYS, PAGE_SIZE, RECHECK_CHUNK,
+                    USER_FILTERS)
 
 
 def make_staff(username='chef', password='GeheimesPasswort1'):
@@ -1094,3 +1100,844 @@ class UserRowsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('verwaist',
                       {row['username'] for row in response.context['rows']})
+
+
+# ---------------------------------------------------------------------------
+# recheck_articles: making is_processed tell the truth
+# ---------------------------------------------------------------------------
+
+RECHECK_URL = '/control/recheck/'
+
+# Everything the view must leave alone — only is_processed may move.
+CONTENT_FIELDS = ['title', 'original_text', 'source_url', 'category'] + [
+    f'{kind}_{level}'
+    for kind in ('version', 'vocab', 'verbs', 'grammar')
+    for level in Article.LEVELS
+]
+
+
+def content_snapshot():
+    """Every content column of every article, keyed by pk."""
+    return {row['pk']: row for row in Article.objects.values('pk', *CONTENT_FIELDS)}
+
+
+def flags():
+    """pk -> is_processed, so a test can state the whole table in one line."""
+    return dict(Article.objects.values_list('pk', 'is_processed'))
+
+
+class RecheckPermissionTests(TestCase):
+    """
+    Rechecking rewrites a flag on every article, so it is a staff-only POST.
+    Anyone else must be bounced away without a single row changing.
+    """
+
+    def setUp(self):
+        # Flagged done but missing its C1 word list: the view would flip this
+        # one, which is exactly what must not happen here.
+        self.article = complete_article(vocab_c1=[], is_processed=True)
+
+    def assertUntouched(self):
+        self.article.refresh_from_db()
+        self.assertTrue(self.article.is_processed)
+        self.assertEqual(self.article.vocab_c1, [])
+
+    def test_anonymous_post_is_redirected_to_the_login_page(self):
+        response = self.client.post(RECHECK_URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response['Location'])
+        self.assertUntouched()
+
+    def test_a_logged_in_learner_cannot_recheck(self):
+        learner = User.objects.create_user(username='lernerin',
+                                           password='GeheimesPasswort1')
+        self.client.force_login(learner)
+        response = self.client.post(RECHECK_URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response['Location'])
+        self.assertUntouched()
+
+    def test_an_inactive_staff_account_cannot_recheck(self):
+        chefin = make_staff('ehemalige')
+        chefin.is_active = False
+        chefin.save()
+        self.client.force_login(chefin)
+        response = self.client.post(RECHECK_URL)
+        self.assertEqual(response.status_code, 302)
+        self.assertUntouched()
+
+    def test_get_is_rejected_even_for_staff(self):
+        """The button is a form; a hand-typed URL must not change anything."""
+        self.client.force_login(make_staff())
+        response = self.client.get(RECHECK_URL)
+        self.assertEqual(response.status_code, 405)
+        self.assertUntouched()
+
+    def test_the_panel_renders_the_recheck_button(self):
+        self.client.force_login(make_staff())
+        response = self.client.get('/control/')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'action="{RECHECK_URL}"')
+
+
+class RecheckArticlesTests(TestCase):
+    """
+    A run that died halfway leaves articles flagged done with empty word
+    lists; a crash after the content was saved leaves finished ones flagged
+    waiting. Both directions are corrected against Article.is_complete().
+    """
+
+    def setUp(self):
+        self.client.force_login(make_staff())
+
+    def post(self, **data):
+        return self.client.post(RECHECK_URL, data)
+
+    def messages_of(self, response):
+        return [str(m) for m in response.wsgi_request._messages]
+
+    def test_an_incomplete_article_flagged_done_goes_back_to_waiting(self):
+        article = complete_article(vocab_b1_b2=[], is_processed=True)
+
+        response = self.post()
+
+        self.assertEqual(response.status_code, 302)
+        article.refresh_from_db()
+        self.assertFalse(article.is_processed)
+
+    def test_each_single_missing_piece_sends_the_article_back(self):
+        for field in ('version_a1_a2', 'version_b1_b2', 'version_c1',
+                      'vocab_a1_a2', 'vocab_b1_b2', 'vocab_c1',
+                      'verbs_a1_a2', 'verbs_b1_b2', 'verbs_c1'):
+            with self.subTest(field=field):
+                empty = '' if field.startswith('version_') else []
+                article = complete_article(is_processed=True, **{field: empty})
+                self.post()
+                article.refresh_from_db()
+                self.assertFalse(article.is_processed)
+                article.delete()
+
+    def test_whitespace_only_text_sends_the_article_back(self):
+        article = complete_article(version_a1_a2='   \n ', is_processed=True)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertFalse(article.is_processed)
+
+    def test_a_complete_article_flagged_waiting_is_marked_done(self):
+        article = complete_article(is_processed=False)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertTrue(article.is_processed)
+
+    def test_rows_whose_flag_was_already_right_are_left_alone(self):
+        done    = complete_article(title='Fertig', is_processed=True)
+        waiting = Article.objects.create(title='Leer', original_text='Text',
+                                         is_processed=False)
+
+        self.post()
+
+        done.refresh_from_db()
+        waiting.refresh_from_db()
+        self.assertTrue(done.is_processed)
+        self.assertFalse(waiting.is_processed)
+
+    def test_missing_grammar_alone_does_not_send_an_article_back(self):
+        article = complete_article(grammar_a1_a2=[], grammar_b1_b2=[],
+                                   grammar_c1=[], is_processed=True)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertTrue(article.is_processed)
+
+    def test_both_directions_are_fixed_in_one_pass(self):
+        liar    = complete_article(title='Luegt', verbs_c1=[], is_processed=True)
+        quiet   = complete_article(title='Still', is_processed=False)
+        done    = complete_article(title='Fertig', is_processed=True)
+        waiting = Article.objects.create(title='Leer', original_text='T',
+                                         is_processed=False)
+
+        self.post()
+
+        self.assertEqual(flags(), {
+            liar.pk: False, quiet.pk: True, done.pk: True, waiting.pk: False,
+        })
+
+    def test_no_content_field_is_altered(self):
+        complete_article(title='Luegt', verbs_c1=[], is_processed=True)
+        complete_article(title='Still', is_processed=False)
+        Article.objects.create(title='Leer', original_text='T', is_processed=False)
+        before = content_snapshot()
+
+        self.post()
+
+        self.assertEqual(content_snapshot(), before)
+
+    def test_the_message_names_both_counts(self):
+        for n in range(3):
+            complete_article(title=f'Luegt {n}', vocab_c1=[], is_processed=True)
+        for n in range(2):
+            complete_article(title=f'Still {n}', is_processed=False)
+        complete_article(title='Fertig', is_processed=True)
+
+        response = self.post()
+
+        self.assertIn('6 geprüft, 3 auf „wartet“ zurückgesetzt, 2 als fertig markiert.',
+                      self.messages_of(response))
+
+    def test_a_single_direction_still_reports_a_zero_for_the_other(self):
+        complete_article(vocab_a1_a2=[], is_processed=True)
+
+        response = self.post()
+
+        self.assertIn('1 geprüft, 1 auf „wartet“ zurückgesetzt, 0 als fertig markiert.',
+                      self.messages_of(response))
+
+    def test_nothing_to_fix_reports_an_info_message(self):
+        complete_article(title='Fertig', is_processed=True)
+        Article.objects.create(title='Leer', original_text='T', is_processed=False)
+
+        response = self.post()
+
+        self.assertIn('2 geprüft — alle Status waren schon richtig.',
+                      self.messages_of(response))
+
+    def test_an_empty_table_reports_zero_checked(self):
+        response = self.post()
+
+        self.assertEqual(Article.objects.count(), 0)
+        self.assertIn('0 geprüft — alle Status waren schon richtig.',
+                      self.messages_of(response))
+
+    def test_it_redirects_to_the_panel_by_default(self):
+        response = self.post()
+        self.assertRedirects(response, '/control/')
+
+    def test_it_honours_the_next_field(self):
+        target = '/control/?tab=articles&status=waiting'
+
+        response = self.post(next=target)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], target)
+
+    def test_a_blank_next_falls_back_to_the_panel(self):
+        response = self.post(next='')
+        self.assertEqual(response['Location'], '/control/')
+
+    def test_the_flags_are_written_in_chunks(self):
+        """
+        SQLite refuses a query with too many bound parameters, so the id
+        lists are written in slices. With the chunk size squeezed down to 2,
+        all ten rows still have to come out right.
+        """
+        self.assertGreater(RECHECK_CHUNK, 0)
+        liars = [complete_article(title=f'Luegt {n}', verbs_a1_a2=[], is_processed=True)
+                 for n in range(5)]
+        quiet = [complete_article(title=f'Still {n}', is_processed=False)
+                 for n in range(5)]
+
+        with patch('control.views.RECHECK_CHUNK', 2):
+            response = self.post()
+
+        expected = {article.pk: False for article in liars}
+        expected.update({article.pk: True for article in quiet})
+        self.assertEqual(flags(), expected)
+        self.assertIn('10 geprüft, 5 auf „wartet“ zurückgesetzt, 5 als fertig markiert.',
+                      self.messages_of(response))
+
+    def test_the_panel_counters_agree_afterwards(self):
+        complete_article(title='Luegt', vocab_c1=[], is_processed=True)
+        complete_article(title='Still', is_processed=False)
+
+        self.post()
+
+        counts = _counts()
+        self.assertEqual(counts['articles_total'], 2)
+        self.assertEqual(counts['articles_done'], 1)
+        self.assertEqual(counts['articles_waiting'], 1)
+
+
+# ---------------------------------------------------------------------------
+# jobs.missing_parts()
+# ---------------------------------------------------------------------------
+
+class MissingPartsTests(TestCase):
+    """
+    The log line has to name the level and the piece, or there is no way to
+    tell a refused AI call from one level answered with an empty list.
+    """
+
+    def test_a_complete_article_has_nothing_missing(self):
+        self.assertEqual(missing_parts(complete_article()), '')
+
+    def test_one_missing_vocab_list_names_its_level(self):
+        self.assertEqual(missing_parts(complete_article(vocab_b1_b2=[])),
+                         'B1/B2: Wörter')
+
+    def test_one_missing_verb_list_names_its_level(self):
+        self.assertEqual(missing_parts(complete_article(verbs_c1=[])),
+                         'C1: Verben')
+
+    def test_one_missing_text_names_its_level(self):
+        self.assertEqual(missing_parts(complete_article(version_a1_a2='')),
+                         'A1/A2: Text')
+
+    def test_whitespace_only_text_counts_as_missing(self):
+        self.assertEqual(missing_parts(complete_article(version_c1='  \n')),
+                         'C1: Text')
+
+    def test_all_three_parts_of_one_level(self):
+        article = complete_article(version_a1_a2='', vocab_a1_a2=[], verbs_a1_a2=[])
+        self.assertEqual(missing_parts(article), 'A1/A2: Text, Wörter, Verben')
+
+    def test_several_levels_are_joined_in_level_order(self):
+        article = complete_article(verbs_c1=[], vocab_a1_a2=[], version_b1_b2='')
+        self.assertEqual(missing_parts(article),
+                         'A1/A2: Wörter | B1/B2: Text | C1: Verben')
+
+    def test_an_empty_article_lists_every_level(self):
+        article = Article.objects.create(title='Leer', original_text='T')
+        self.assertEqual(
+            missing_parts(article),
+            'A1/A2: Text, Wörter, Verben | B1/B2: Text, Wörter, Verben '
+            '| C1: Text, Wörter, Verben'
+        )
+
+    def test_missing_grammar_is_never_reported(self):
+        article = complete_article(grammar_a1_a2=[], grammar_b1_b2=[], grammar_c1=[])
+        self.assertEqual(missing_parts(article), '')
+
+
+# ---------------------------------------------------------------------------
+# jobs.missing_parts() on cards that are there but too thin
+# ---------------------------------------------------------------------------
+
+class MissingPartsThinCardTests(TestCase):
+    """
+    A level whose word list came back full of cards without an example reads
+    differently from one the AI answered with an empty list: the log says
+    "unvollständig" and how many cards are affected, so the operator can see
+    at a glance whether to reprocess or to fix the prompt.
+    """
+
+    def test_a_thin_verb_card_is_named_with_its_count(self):
+        self.assertEqual(missing_parts(complete_article(verbs_b1_b2=[BROKEN_VERB])),
+                         'B1/B2: Verben unvollständig (1)')
+
+    def test_a_thin_word_card_is_named_with_its_count(self):
+        thin = card_without(vocab_card(), 'example')
+        self.assertEqual(missing_parts(complete_article(vocab_a1_a2=[thin])),
+                         'A1/A2: Wörter unvollständig (1)')
+
+    def test_the_count_says_how_many_cards_are_affected(self):
+        vocab = [vocab_card(),
+                 card_without(vocab_card(word='die Tür'), 'example_translation'),
+                 vocab_card(word='der Hof', translation='   ')]
+        self.assertEqual(missing_parts(complete_article(vocab_c1=vocab)),
+                         'C1: Wörter unvollständig (2)')
+
+    def test_thin_words_and_verbs_at_one_level_are_both_named(self):
+        article = complete_article(vocab_c1=[vocab_card(translation='')],
+                                   verbs_c1=[BROKEN_VERB])
+        self.assertEqual(missing_parts(article),
+                         'C1: Wörter unvollständig (1), Verben unvollständig (1)')
+
+    def test_an_empty_list_and_a_thin_list_read_differently(self):
+        """
+        "Wörter" means the AI sent nothing at all; "Wörter unvollständig"
+        means it sent cards a learner cannot use.
+        """
+        article = complete_article(vocab_a1_a2=[], verbs_c1=[BROKEN_VERB])
+        self.assertEqual(missing_parts(article),
+                         'A1/A2: Wörter | C1: Verben unvollständig (1)')
+
+    def test_a_junk_entry_counts_as_a_thin_card(self):
+        self.assertEqual(missing_parts(complete_article(vocab_b1_b2=['kein Wort'])),
+                         'B1/B2: Wörter unvollständig (1)')
+
+    def test_a_thin_preposition_is_never_reported(self):
+        article = complete_article(
+            verbs_b1_b2=[verb_card(prepositions=[{'preposition': 'mit + Dativ'}])])
+        self.assertEqual(missing_parts(article), '')
+
+    def test_a_missing_plural_or_tense_is_never_reported(self):
+        article = complete_article(
+            vocab_a1_a2=[card_without(vocab_card(), 'plural')],
+            verbs_a1_a2=[card_without(verb_card(), 'tense', 'key_forms')])
+        self.assertEqual(missing_parts(article), '')
+
+
+# ---------------------------------------------------------------------------
+# recheck_articles on cards that are there but too thin
+# ---------------------------------------------------------------------------
+
+class RecheckThinCardTests(TestCase):
+    """
+    "Alle Artikel prüfen" goes through Article.is_complete(), so it has to
+    inherit the card rule too: an article whose cards show empty boxes is not
+    finished, while one missing only a plural or a tense is.
+    """
+
+    def setUp(self):
+        self.client.force_login(make_staff())
+
+    def post(self):
+        return self.client.post(RECHECK_URL)
+
+    def test_a_thin_verb_card_sends_the_article_back_to_waiting(self):
+        article = complete_article(verbs_b1_b2=[BROKEN_VERB], is_processed=True)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertFalse(article.is_processed)
+
+    def test_a_thin_word_card_sends_the_article_back_to_waiting(self):
+        thin = card_without(vocab_card(), 'example_translation')
+        article = complete_article(vocab_c1=[thin], is_processed=True)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertFalse(article.is_processed)
+
+    def test_an_article_with_thin_cards_is_not_marked_done(self):
+        article = complete_article(verbs_a1_a2=[BROKEN_VERB], is_processed=False)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertFalse(article.is_processed)
+
+    def test_a_missing_plural_or_tense_leaves_the_article_marked_done(self):
+        article = complete_article(
+            is_processed=True,
+            vocab_b1_b2=[card_without(vocab_card(), 'plural')],
+            verbs_b1_b2=[card_without(verb_card(), 'tense', 'key_forms',
+                                      'form_in_text')])
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertTrue(article.is_processed)
+
+    def test_a_thin_preposition_leaves_the_article_marked_done(self):
+        article = complete_article(
+            is_processed=True,
+            verbs_c1=[verb_card(prepositions=[{'preposition': 'mit + Dativ'}])])
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertTrue(article.is_processed)
+
+    def test_the_thin_article_is_counted_in_the_message(self):
+        complete_article(title='Dünn', verbs_c1=[BROKEN_VERB], is_processed=True)
+
+        response = self.post()
+
+        self.assertIn('1 geprüft, 1 auf „wartet“ zurückgesetzt, 0 als fertig markiert.',
+                      [str(m) for m in response.wsgi_request._messages])
+
+    def test_the_thin_cards_themselves_are_left_untouched(self):
+        """Only the flag may move; the content stays for the next run."""
+        article = complete_article(verbs_c1=[BROKEN_VERB], is_processed=True)
+
+        self.post()
+
+        article.refresh_from_db()
+        self.assertEqual(article.verbs_c1, [BROKEN_VERB])
+
+
+# ---------------------------------------------------------------------------
+# jobs.process_articles(): no provider is ever contacted
+# ---------------------------------------------------------------------------
+
+VERSIONS = ('Einfacher Text.', 'Mittlerer Text.', 'Schwerer Text.')
+
+
+def fake_cards(level, text):
+    """
+    Stand-in for generate_vocab_and_grammar: (vocab, verbs, grammar).
+
+    The cards are complete ones, because `is_complete()` now looks inside
+    them: a card without its meaning or example leaves the article waiting.
+    """
+    return ([vocab_card(word=f'Wort {level}')],
+            [verb_card(infinitive=f'verb_{level}')],
+            [{'rule': f'Regel {level}'}])
+
+
+def cards_without(level_to_empty, part):
+    """The same stand-in, but answering one level with an empty list."""
+    def side_effect(level, text):
+        vocab, verbs, grammar = fake_cards(level, text)
+        if level == level_to_empty:
+            if part == 'vocab':
+                vocab = []
+            else:
+                verbs = []
+        return vocab, verbs, grammar
+    return side_effect
+
+
+def cards_thin_at(level_to_thin, part):
+    """The same stand-in, but answering one level with unusable cards."""
+    def side_effect(level, text):
+        vocab, verbs, grammar = fake_cards(level, text)
+        if level == level_to_thin:
+            if part == 'vocab':
+                vocab = [card_without(vocab_card(word=f'Wort {level}'), 'example')]
+            else:
+                verbs = [dict(BROKEN_VERB)]
+        return vocab, verbs, grammar
+    return side_effect
+
+
+class ProcessArticlesJobTests(TestCase):
+    """
+    The job used to set is_processed=True no matter what came back. Now the
+    flag follows is_complete(), while the generated content is still saved.
+
+    generate_versions / generate_vocab_and_grammar are imported inside the
+    function body, so patching them on articles.ai_processor is enough to keep
+    Groq and Gemini out of these tests. time.sleep is neutralised too.
+    """
+
+    def setUp(self):
+        self.run = JobRun.objects.create(job='process_articles', status='running')
+        self.article = Article.objects.create(title='Rohartikel',
+                                              original_text='Originaltext')
+        sleeper = patch('control.jobs.time.sleep')
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+
+    def run_job(self, cards=fake_cards, versions=VERSIONS, params=None):
+        with patch('articles.ai_processor.generate_versions',
+                   return_value=versions) as versions_mock, \
+             patch('articles.ai_processor.generate_vocab_and_grammar',
+                   side_effect=cards) as cards_mock:
+            process_articles(self.run, {'count': 10} if params is None else params)
+        self.run.refresh_from_db()
+        self.article.refresh_from_db()
+        return versions_mock, cards_mock
+
+    # --- the happy path ---------------------------------------------------
+
+    def test_full_content_marks_the_article_done(self):
+        self.run_job()
+
+        self.assertTrue(self.article.is_processed)
+        self.assertEqual(self.article.version_a1_a2, 'Einfacher Text.')
+        self.assertEqual(self.article.version_b1_b2, 'Mittlerer Text.')
+        self.assertEqual(self.article.version_c1, 'Schwerer Text.')
+        self.assertEqual(self.article.vocab_c1, [vocab_card(word='Wort c1')])
+        self.assertEqual(self.article.verbs_a1_a2,
+                         [verb_card(infinitive='verb_a1_a2')])
+        self.assertEqual(self.article.grammar_b1_b2, [{'rule': 'Regel b1_b2'}])
+
+    def test_the_happy_path_counts_the_article_as_processed(self):
+        self.run_job()
+
+        self.assertIn('OK  Rohartikel', self.run.log)
+        self.assertNotIn('UNVOLLSTÄNDIG', self.run.log)
+        self.assertIn('Fertig: 1 verarbeitet, 0 fehlgeschlagen, 0 warten noch.',
+                      self.run.log)
+
+    def test_no_provider_is_contacted_and_no_pause_is_really_taken(self):
+        versions_mock, cards_mock = self.run_job()
+
+        versions_mock.assert_called_once_with('Rohartikel', 'Originaltext')
+        self.assertEqual([call.args[0] for call in cards_mock.call_args_list],
+                         ['a1_a2', 'b1_b2', 'c1'])
+        # Three pauses between the four calls, none of them actually slept.
+        self.assertEqual(self.sleep.call_count, 3)
+
+    # --- an empty list for one level --------------------------------------
+
+    def test_an_empty_vocab_list_leaves_the_article_waiting(self):
+        self.run_job(cards=cards_without('b1_b2', 'vocab'))
+
+        self.assertFalse(self.article.is_processed)
+
+    def test_an_empty_verb_list_leaves_the_article_waiting(self):
+        self.run_job(cards=cards_without('c1', 'verbs'))
+
+        self.assertFalse(self.article.is_processed)
+
+    def test_the_generated_content_is_still_saved(self):
+        """Throwing the answer away would mean paying for it twice."""
+        self.run_job(cards=cards_without('b1_b2', 'vocab'))
+
+        self.assertEqual(self.article.version_b1_b2, 'Mittlerer Text.')
+        self.assertEqual(self.article.vocab_b1_b2, [])
+        self.assertEqual(self.article.verbs_b1_b2,
+                         [verb_card(infinitive='verb_b1_b2')])
+        self.assertEqual(self.article.vocab_a1_a2, [vocab_card(word='Wort a1_a2')])
+        self.assertEqual(self.article.vocab_c1, [vocab_card(word='Wort c1')])
+
+    def test_an_incomplete_article_counts_as_failed(self):
+        self.run_job(cards=cards_without('b1_b2', 'vocab'))
+
+        self.assertIn('Fertig: 0 verarbeitet, 1 fehlgeschlagen, 1 warten noch.',
+                      self.run.log)
+        self.assertNotIn('OK  Rohartikel', self.run.log)
+
+    def test_the_log_says_unvollstaendig_and_names_the_gap(self):
+        self.run_job(cards=cards_without('b1_b2', 'vocab'))
+
+        self.assertIn('UNVOLLSTÄNDIG', self.run.log)
+        self.assertIn('B1/B2: Wörter', self.run.log)
+        self.assertIn('Rohartikel', self.run.log)
+
+    def test_an_empty_verb_list_is_named_in_the_log(self):
+        self.run_job(cards=cards_without('c1', 'verbs'))
+
+        self.assertIn('UNVOLLSTÄNDIG', self.run.log)
+        self.assertIn('C1: Verben', self.run.log)
+
+    def test_an_empty_text_for_one_level_leaves_the_article_waiting(self):
+        self.run_job(versions=('Einfacher Text.', '   ', 'Schwerer Text.'))
+
+        self.assertFalse(self.article.is_processed)
+        self.assertIn('B1/B2: Text', self.run.log)
+
+    # --- batches and failures ---------------------------------------------
+
+    def test_a_mixed_batch_counts_both_sides(self):
+        second = Article.objects.create(title='Zweiter', original_text='Text 2')
+
+        def versions(title, original_text):
+            return (f'A1 {title}', f'B1 {title}', f'C1 {title}')
+
+        def cards(level, text):
+            vocab, verbs, grammar = fake_cards(level, text)
+            # Only the second article's C1 pass comes back empty — keyed on the
+            # text, because the queue order is not this test's business.
+            if level == 'c1' and text.endswith('Zweiter'):
+                verbs = []
+            return vocab, verbs, grammar
+
+        with patch('articles.ai_processor.generate_versions', side_effect=versions), \
+             patch('articles.ai_processor.generate_vocab_and_grammar', side_effect=cards):
+            process_articles(self.run, {'count': 10})
+
+        self.run.refresh_from_db()
+        self.article.refresh_from_db()
+        second.refresh_from_db()
+        self.assertTrue(self.article.is_processed)
+        self.assertFalse(second.is_processed)
+        self.assertIn('Fertig: 1 verarbeitet, 1 fehlgeschlagen, 1 warten noch.',
+                      self.run.log)
+
+    def test_only_unprocessed_articles_are_picked_up(self):
+        complete_article(title='Schon fertig', is_processed=True)
+
+        _, cards_mock = self.run_job()
+
+        self.assertEqual(cards_mock.call_count, 3)   # one article, three levels
+
+    def test_an_empty_queue_logs_and_calls_nothing(self):
+        Article.objects.filter(pk=self.article.pk).update(is_processed=True)
+
+        versions_mock, cards_mock = self.run_job()
+
+        versions_mock.assert_not_called()
+        cards_mock.assert_not_called()
+        self.assertIn('Keine unverarbeiteten Artikel.', self.run.log)
+
+    def test_a_failing_provider_is_logged_as_an_error_not_as_done(self):
+        with patch('articles.ai_processor.generate_versions',
+                   side_effect=RuntimeError('429 rate limit')), \
+             patch('articles.ai_processor.generate_vocab_and_grammar') as cards_mock:
+            process_articles(self.run, {'count': 1})
+
+        self.run.refresh_from_db()
+        self.article.refresh_from_db()
+        cards_mock.assert_not_called()
+        self.assertFalse(self.article.is_processed)
+        self.assertIn('FEHLER  Rohartikel', self.run.log)
+
+    def test_only_pk_processes_exactly_that_article(self):
+        other = Article.objects.create(title='Anderer', original_text='Text')
+
+        self.run_job(params={'count': 10, 'only_pk': self.article.pk})
+
+        other.refresh_from_db()
+        self.assertTrue(self.article.is_processed)
+        self.assertFalse(other.is_processed)
+
+    # --- cards that came back there but too thin to show ------------------
+
+    def test_a_verb_card_without_an_example_leaves_the_article_waiting(self):
+        self.run_job(cards=cards_thin_at('b1_b2', 'verbs'))
+
+        self.assertFalse(self.article.is_processed)
+
+    def test_a_word_card_without_an_example_leaves_the_article_waiting(self):
+        self.run_job(cards=cards_thin_at('c1', 'vocab'))
+
+        self.assertFalse(self.article.is_processed)
+
+    def test_the_thin_cards_are_still_saved(self):
+        """Throwing the answer away would mean paying for it twice."""
+        self.run_job(cards=cards_thin_at('b1_b2', 'verbs'))
+
+        self.assertEqual(self.article.verbs_b1_b2, [BROKEN_VERB])
+        self.assertEqual(self.article.version_b1_b2, 'Mittlerer Text.')
+        self.assertEqual(self.article.vocab_b1_b2, [vocab_card(word='Wort b1_b2')])
+
+    def test_the_log_names_the_thin_list_and_its_count(self):
+        self.run_job(cards=cards_thin_at('b1_b2', 'verbs'))
+
+        self.assertIn('UNVOLLSTÄNDIG', self.run.log)
+        self.assertIn('B1/B2: Verben unvollständig (1)', self.run.log)
+
+    def test_a_thin_level_counts_as_failed(self):
+        self.run_job(cards=cards_thin_at('a1_a2', 'vocab'))
+
+        self.assertIn('Fertig: 0 verarbeitet, 1 fehlgeschlagen, 1 warten noch.',
+                      self.run.log)
+        self.assertNotIn('OK  Rohartikel', self.run.log)
+
+    def test_cards_missing_only_a_plural_or_a_tense_still_count_as_done(self):
+        """
+        The AI rightly leaves those out for adjectives and for verbs it saw
+        in one form only; sending the article back over them would mean
+        reprocessing it for ever.
+        """
+        def sparse(level, text):
+            return ([card_without(vocab_card(word=f'Wort {level}'), 'plural')],
+                    [card_without(verb_card(infinitive=f'verb_{level}'),
+                                  'tense', 'key_forms', 'form_in_text')],
+                    [{'rule': f'Regel {level}'}])
+
+        self.run_job(cards=sparse)
+
+        self.assertTrue(self.article.is_processed)
+        self.assertIn('OK  Rohartikel', self.run.log)
+
+
+# ---------------------------------------------------------------------------
+# jobs.generate_conversations(): the "Karten unvollständig" note
+# ---------------------------------------------------------------------------
+
+CONVERSATION_LINES = [{'speaker': 'A', 'text': 'Guten Tag.'},
+                      {'speaker': 'B', 'text': 'Guten Tag!'}]
+
+
+class GenerateConversationsJobTests(TestCase):
+    """
+    A conversation carries no "fertig" flag that could be corrected later, so
+    a thin card list would pass unnoticed until a learner opened the page and
+    found an empty box. The OK line therefore says how many cards are thin.
+
+    generate_conversation is imported inside the function body, so patching
+    it on articles.ai_processor keeps Groq and Gemini out. time.sleep is
+    neutralised too.
+    """
+
+    def setUp(self):
+        self.run = JobRun.objects.create(job='generate_conversations',
+                                         status='running')
+        sleeper = patch('control.jobs.time.sleep')
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+
+    def run_job(self, vocab, verbs, params=None):
+        answer = ('Beim Arzt', CONVERSATION_LINES, vocab, verbs,
+                  [{'rule': 'Perfekt'}], ['Warum?'])
+        with patch('articles.ai_processor.generate_conversation',
+                   return_value=answer) as mock:
+            generate_conversations(self.run,
+                                   {'level': 'b1_b2', 'count': 1} if params is None
+                                   else params)
+        self.run.refresh_from_db()
+        return mock
+
+    def test_complete_cards_log_a_plain_ok_line(self):
+        self.run_job([vocab_card()], [verb_card()])
+
+        self.assertIn('OK  [b1_b2] Beim Arzt', self.run.log)
+        self.assertNotIn('Karten unvollständig', self.run.log)
+        self.assertIn('Fertig: 1 erstellt, 0 fehlgeschlagen.', self.run.log)
+
+    def test_a_thin_verb_card_is_noted_in_the_ok_line(self):
+        self.run_job([vocab_card()], [BROKEN_VERB])
+
+        self.assertIn('OK  [b1_b2] Beim Arzt  (Karten unvollständig: '
+                      '0 Wörter, 1 Verben)', self.run.log)
+
+    def test_a_thin_word_card_is_noted_in_the_ok_line(self):
+        thin = card_without(vocab_card(), 'example_translation')
+
+        self.run_job([thin, vocab_card(word='die Tür')], [verb_card()])
+
+        self.assertIn('(Karten unvollständig: 1 Wörter, 0 Verben)', self.run.log)
+
+    def test_both_sides_are_counted_in_one_note(self):
+        self.run_job([vocab_card(translation='  '), vocab_card(word='die Tür')],
+                     [BROKEN_VERB, verb_card()])
+
+        self.assertIn('(Karten unvollständig: 1 Wörter, 1 Verben)', self.run.log)
+
+    def test_the_conversation_is_still_created_with_what_came_back(self):
+        """A thin conversation is worth keeping; it is only worth flagging."""
+        self.run_job([vocab_card()], [BROKEN_VERB])
+
+        conv = Conversation.objects.get()
+        self.assertEqual(conv.level, 'b1_b2')
+        self.assertEqual(conv.topic, 'Beim Arzt')
+        self.assertEqual(conv.verbs, [BROKEN_VERB])
+        self.assertEqual(conv.lines, CONVERSATION_LINES)
+        self.assertIn('Fertig: 1 erstellt, 0 fehlgeschlagen.', self.run.log)
+
+    def test_a_thin_preposition_is_not_worth_a_note(self):
+        verb = verb_card(prepositions=[{'preposition': 'mit + Dativ'}])
+
+        self.run_job([vocab_card()], [verb])
+
+        self.assertNotIn('Karten unvollständig', self.run.log)
+
+    def test_missing_plural_and_tense_are_not_worth_a_note(self):
+        self.run_job([card_without(vocab_card(), 'plural')],
+                     [card_without(verb_card(), 'tense', 'key_forms')])
+
+        self.assertNotIn('Karten unvollständig', self.run.log)
+
+    def test_an_empty_card_list_is_not_counted_as_thin(self):
+        """There is no unusable card here — only nothing at all."""
+        self.run_job([], [])
+
+        self.assertNotIn('Karten unvollständig', self.run.log)
+
+    def test_no_provider_is_contacted_and_no_pause_is_really_taken(self):
+        mock = self.run_job([vocab_card()], [verb_card()])
+
+        mock.assert_called_once_with('b1_b2')
+        self.assertEqual(self.sleep.call_count, 1)
+
+    def test_level_all_asks_for_every_level_and_notes_each_one(self):
+        mock = self.run_job([vocab_card()], [BROKEN_VERB],
+                            params={'level': 'all', 'count': 1})
+
+        self.assertEqual([call.args[0] for call in mock.call_args_list],
+                         ['a1_a2', 'b1_b2', 'c1'])
+        self.assertEqual(self.run.log.count('Karten unvollständig: 0 Wörter, 1 Verben'),
+                         3)
+        self.assertIn('Fertig: 3 erstellt, 0 fehlgeschlagen.', self.run.log)
+
+    def test_a_failing_provider_is_logged_as_an_error(self):
+        with patch('articles.ai_processor.generate_conversation',
+                   side_effect=RuntimeError('429 rate limit')):
+            generate_conversations(self.run, {'level': 'b1_b2', 'count': 1})
+
+        self.run.refresh_from_db()
+        self.assertEqual(Conversation.objects.count(), 0)
+        self.assertIn('FEHLER  [b1_b2]', self.run.log)
+        self.assertIn('Fertig: 0 erstellt, 1 fehlgeschlagen.', self.run.log)

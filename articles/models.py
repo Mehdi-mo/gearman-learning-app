@@ -1,5 +1,7 @@
 from django.db import models
 
+from . import cards
+
 class Article(models.Model):
     CATEGORY_CHOICES = [
         ('general', 'Allgemein'),
@@ -35,11 +37,42 @@ class Article(models.Model):
     is_processed  = models.BooleanField(default=False)
     created_at    = models.DateTimeField(auto_now_add=True)
 
+    LEVELS = ('a1_a2', 'b1_b2', 'c1')
+
     class Meta:
         ordering = ['-published_at']
 
     def __str__(self):
         return self.title
+
+    def is_complete(self):
+        """
+        True only when a learner at every level finds a full article here.
+
+        `is_processed` is just a flag the pipeline sets; a run that died
+        halfway through leaves it True with empty word lists behind it. This
+        is the real rule, shared by the processing job and by "Alle Artikel
+        prüfen" on the control panel, so the two can never disagree.
+
+        A list that came back full of unusable cards counts as missing too:
+        `cards.cards_complete` asks whether each card carries its German
+        entry, its meaning and an example with a translation. A card without
+        them shows a learner an empty box, and used to crash the page.
+
+        Grammar is deliberately left out: the AI legitimately finds no
+        grammar notes in some articles, and that alone should not send one
+        back into the queue.
+        """
+        for level in self.LEVELS:
+            if not (getattr(self, f'version_{level}') or '').strip():
+                return False
+            vocab = getattr(self, f'vocab_{level}')
+            verbs = getattr(self, f'verbs_{level}')
+            if not vocab or not verbs:
+                return False
+            if not cards.cards_complete(vocab, verbs):
+                return False
+        return True
 
 
 class Conversation(models.Model):

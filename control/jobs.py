@@ -6,6 +6,7 @@ bar, and checks for cancellation between items so "Stoppen" takes effect.
 """
 import time
 
+from articles import cards
 from articles.models import (Article, Conversation, PrepositionExercise,
                              NomenVerbVerbindung, NomenVerbExercise)
 
@@ -57,6 +58,39 @@ def fetch_articles(run, params):
     run.log_line(f'Fertig: {added} neu, {skipped} schon vorhanden.')
 
 
+LEVEL_LABELS = {'a1_a2': 'A1/A2', 'b1_b2': 'B1/B2', 'c1': 'C1'}
+
+
+def missing_parts(article):
+    """
+    Which pieces `Article.is_complete()` is unhappy about, as a log line.
+
+    Saying only "incomplete" would leave no way to tell a refused AI call
+    from one level the model answered with an empty list — or from one that
+    came back with cards too thin to show, which reads as "unvollständig"
+    behind the count of cards affected.
+    """
+    gaps = []
+    for level in Article.LEVELS:
+        parts = []
+        if not (getattr(article, f'version_{level}') or '').strip():
+            parts.append('Text')
+        vocab = getattr(article, f'vocab_{level}')
+        verbs = getattr(article, f'verbs_{level}')
+        thin_words, thin_verbs = cards.incomplete_counts(vocab, verbs)
+        if not vocab:
+            parts.append('Wörter')
+        elif thin_words:
+            parts.append(f'Wörter unvollständig ({thin_words})')
+        if not verbs:
+            parts.append('Verben')
+        elif thin_verbs:
+            parts.append(f'Verben unvollständig ({thin_verbs})')
+        if parts:
+            gaps.append(f"{LEVEL_LABELS[level]}: {', '.join(parts)}")
+    return ' | '.join(gaps)
+
+
 def process_articles(run, params):
     from articles.ai_processor import generate_versions, generate_vocab_and_grammar
 
@@ -102,10 +136,19 @@ def process_articles(run, params):
             article.vocab_c1, article.verbs_c1, article.grammar_c1 = \
                 generate_vocab_and_grammar('c1', v_c1)
 
-            article.is_processed = True
+            # The AI sometimes answers with an empty list for one level, or
+            # with cards missing their example or translation. Keep what came
+            # back, but leave the article waiting instead of marking it done
+            # with nothing for a learner to read at that level.
+            article.is_processed = article.is_complete()
             article.save()
-            ok += 1
-            run.log_line('OK  ' + article.title[:70])
+            if article.is_processed:
+                ok += 1
+                run.log_line('OK  ' + article.title[:70])
+            else:
+                failed += 1
+                run.log_line('UNVOLLSTÄNDIG  ' + article.title[:50]
+                             + ': ' + missing_parts(article))
         except Exception as e:
             failed += 1
             run.log_line('FEHLER  ' + article.title[:50] + ': ' + str(e)[:120])
@@ -142,7 +185,14 @@ def generate_conversations(run, params):
                     verbs=verbs, grammar=grammar, questions=questions,
                 )
                 ok += 1
-                run.log_line(f'OK  [{lvl}] ' + str(topic)[:60])
+                note = ''
+                thin_words, thin_verbs = cards.incomplete_counts(vocab, verbs)
+                if thin_words or thin_verbs:
+                    # Conversations carry no "fertig" flag to correct, so a
+                    # thin card list would otherwise pass unnoticed until a
+                    # learner opened the page and found an empty box.
+                    note = f'  (Karten unvollständig: {thin_words} Wörter, {thin_verbs} Verben)'
+                run.log_line(f'OK  [{lvl}] ' + str(topic)[:60] + note)
             except Exception as e:
                 failed += 1
                 run.log_line(f'FEHLER  [{lvl}]: ' + str(e)[:120])

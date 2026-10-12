@@ -1283,8 +1283,11 @@ def vocab_card(**overrides):
 def verb_card(**overrides):
     """One verb card, including the nested preposition entries."""
     card = {
-        'verb':                'anfangen',
+        'infinitive':          'anfangen',
         'meaning':             'to begin',
+        'form_in_text':        'fangen an',
+        'tense':               'Präsens',
+        'key_forms':           'anfangen → fing an → hat angefangen',
         'example':             'Wir fangen an.',
         'example_translation': 'We are beginning.',
         'prepositions': [{
@@ -1433,13 +1436,19 @@ class PrepareCardsTests(TestCase):
         self.assertNotIn('translation_pending', card)
         self.assertNotIn('example_translation_pending', card)
 
-    def test_junk_entries_do_not_break_the_page(self):
+    def test_junk_entries_are_dropped_instead_of_breaking_the_page(self):
+        # A bare string where a card belongs has nothing to show, and the
+        # template cannot look a key up on it either — it raised rather than
+        # rendering a gap. The same goes for a preposition list that is not
+        # a list.
         vocab, verbs = vtr.prepare_cards(
             ['kein Wörterbuch', None],
             [verb_card(prepositions='keine Liste'), 42],
             'Persian',
         )
-        self.assertEqual(len(vocab), 2)
+        self.assertEqual(vocab, [])
+        self.assertEqual(len(verbs), 1)
+        self.assertEqual(verbs[0]['prepositions'], [])
         self.assertTrue(verbs[0]['meaning_pending'])
 
     def test_extra_whitespace_still_hits_the_cache(self):

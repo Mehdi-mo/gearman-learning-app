@@ -133,6 +133,22 @@ def parse_json_response(text):
         return []
 
 
+def ask_json_list(prompt, max_tokens, attempts=3):
+    """
+    Ask for a JSON array and retry when the answer is empty or unparseable.
+
+    parse_json_response() swallows errors and returns [], which used to be saved
+    as "no vocab/verbs" and the article was still marked processed.
+    """
+    for attempt in range(1, attempts + 1):
+        result = parse_json_response(ask_ai(prompt, max_tokens))
+        if isinstance(result, list) and result:
+            return result
+        print(f"  Empty/invalid JSON (attempt {attempt}/{attempts}), retrying...")
+        time.sleep(3)
+    return []
+
+
 def generate_versions(title, original_text):
     prompt_a1 = f"""Du bist ein Deutschlehrer. Schreibe den folgenden Artikel für Anfänger (A1/A2) um.
 Regeln:
@@ -233,9 +249,9 @@ Return ONLY valid JSON array, nothing else, no markdown:
 "meaning", "example_translation" and all preposition "example_translation" must be in: {native_language}
 Text: {text}"""
 
-    print(f"  Vocab {level}...");   vocab = parse_json_response(ask_ai(vocab_prompt, 600))
+    print(f"  Vocab {level}...");   vocab = ask_json_list(vocab_prompt, 2500)
     time.sleep(5)
-    print(f"  Verbs {level}...");   verbs = parse_json_response(ask_ai(verbs_prompt, 1500))
+    print(f"  Verbs {level}...");   verbs = ask_json_list(verbs_prompt, 4000)
     time.sleep(5)
     return vocab, verbs, []
 
@@ -343,11 +359,11 @@ Return ONLY valid JSON array, nothing else, no markdown:
 Conversation:
 {full_text}"""
 
-    print("  Conv vocab...");     vocab     = parse_json_response(ask_ai(vocab_prompt,     700))
+    print("  Conv vocab...");     vocab     = ask_json_list(vocab_prompt,     2500)
     time.sleep(5)
-    print("  Conv verbs...");     verbs     = parse_json_response(ask_ai(verbs_prompt,     1500))
+    print("  Conv verbs...");     verbs     = ask_json_list(verbs_prompt,     4000)
     time.sleep(5)
-    print("  Conv questions..."); questions = parse_json_response(ask_ai(questions_prompt, 2000))
+    print("  Conv questions..."); questions = ask_json_list(questions_prompt, 4000)
     time.sleep(5)
 
     return topic, lines, vocab, verbs, [], questions

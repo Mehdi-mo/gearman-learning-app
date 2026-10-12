@@ -413,6 +413,58 @@ def set_premium(request):
     return redirect(back)
 
 
+# SQLite refuses a query with too many bound parameters, so the id lists are
+# written in slices rather than one huge IN (...).
+RECHECK_CHUNK = 500
+
+
+@staff_member_required
+@require_POST
+def recheck_articles(request):
+    """
+    Make `is_processed` tell the truth, without calling the AI.
+
+    A run that died halfway leaves articles flagged done with empty word
+    lists; a crash after the content was saved leaves finished ones flagged
+    waiting. Both are corrected here against `Article.is_complete()`, the
+    same rule the processing job uses — which also sends back an article
+    whose cards are missing their example or translation, so it can be
+    generated again. Only the flag is touched — no text, word list or
+    grammar note is changed.
+    """
+    fields = ['pk', 'is_processed']
+    for level in Article.LEVELS:
+        fields += [f'version_{level}', f'vocab_{level}', f'verbs_{level}']
+
+    checked = 0
+    to_waiting, to_done = [], []
+    # `original_text` is the big column and the rule does not look at it, so
+    # it stays out of the query.
+    for article in Article.objects.only(*fields).iterator():
+        checked += 1
+        complete = article.is_complete()
+        if article.is_processed and not complete:
+            to_waiting.append(article.pk)
+        elif complete and not article.is_processed:
+            to_done.append(article.pk)
+
+    for ids, flag in ((to_waiting, False), (to_done, True)):
+        for start in range(0, len(ids), RECHECK_CHUNK):
+            Article.objects.filter(
+                pk__in=ids[start:start + RECHECK_CHUNK]
+            ).update(is_processed=flag)
+
+    if to_waiting or to_done:
+        messages.success(
+            request,
+            f'{checked} geprüft, {len(to_waiting)} auf „wartet“ '
+            f'zurückgesetzt, {len(to_done)} als fertig markiert.'
+        )
+    else:
+        messages.info(request, f'{checked} geprüft — alle Status waren schon richtig.')
+    return redirect(request.POST.get('next') or 'control_panel')
+
+
 @staff_member_required
 @require_POST
 def clear_cache(request):
