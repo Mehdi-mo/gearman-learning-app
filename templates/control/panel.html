@@ -47,6 +47,16 @@
     .p-free { color:var(--muted); border-color:var(--border2); }
     .p-team { color:#7f9fd0; border-color:#7f9fd0; }
 
+    .board h2 { position:relative; padding-right:2rem; }
+    .board-x { position:absolute; right:0; top:-0.2rem; background:none; border:none; color:var(--muted); font-size:1.5rem; line-height:1; cursor:pointer; padding:0 0.3rem; font-family:inherit; }
+    .board-x:hover { color:var(--gold); }
+    .bstep { color:var(--muted); font-family:ui-monospace,monospace; font-size:0.8rem; white-space:nowrap; }
+    .berr { color:#c75c5c; font-size:0.8rem; max-width:320px; }
+    .bhint { font-size:0.8rem; color:var(--muted); margin-left:0.6rem; }
+    .p-run { color:#fff; background:var(--gold); border-color:var(--gold); }
+    .p-inc { color:#d08f3c; border-color:#d08f3c; }
+    .p-err { color:#c75c5c; border-color:#c75c5c; }
+
     .usearch { display:flex; gap:0.5rem; margin-bottom:1rem; }
     .usearch input[type=search] { background:var(--bg3); border:1px solid var(--border2); color:var(--text); padding:0.4rem 0.7rem; border-radius:2px; font-family:inherit; font-size:0.9rem; min-width:220px; }
     .uacts { display:flex; gap:0.35rem; flex-wrap:wrap; }
@@ -164,6 +174,31 @@
     </form>
 </div>
 
+{% if tab != 'conversations' and tab != 'users' %}
+<div class="card board" id="board-card" data-run="{{ board.run_id|default:'' }}"{% if not board %} style="display:none"{% endif %}>
+    <h2>Verarbeitung <small id="board-summary">{{ board.summary|default:'' }}</small>
+        <button type="button" id="board-close" class="board-x" title="Ausblenden">&times;</button></h2>
+    <table class="adm">
+        <thead><tr><th>Titel</th><th style="width:120px">Status</th><th style="width:160px">Schritt</th><th>Hinweis</th><th style="width:90px"></th></tr></thead>
+        <tbody id="board-rows">
+            {% for item in board.items %}
+            <tr>
+                <td class="ttl">{{ item.title }}</td>
+                <td><span class="pill {{ item.css }}">{{ item.label }}</span></td>
+                <td class="bstep">{{ item.step }}</td>
+                <td class="berr">{{ item.error }}</td>
+                <td>{% if item.retry %}<form method="post" action="{% url 'control_process_one' %}">{% csrf_token %}
+                        <input type="hidden" name="pk" value="{{ item.pk }}">
+                        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                        <button class="btn-ghost-sm" type="submit">Nochmal</button>
+                    </form>{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
 <div class="card">
     <div class="tabs">
         <a href="?tab=articles" class="{% if tab != 'conversations' and tab != 'users' %}on{% endif %}">Artikel</a>
@@ -263,7 +298,9 @@
             </tr>
             {% empty %}<tr><td colspan="5" style="color:var(--muted);padding:1.5rem 0">Keine Artikel.</td></tr>{% endfor %}
         </table>
-        {% if rows %}<button class="btn-danger" type="submit" style="margin-top:1rem">Ausgewählte löschen</button>{% endif %}
+        {% if rows %}<button class="btn-sm" type="submit" formaction="{% url 'control_process_selected' %}" style="margin-top:1rem">Ausgewählte verarbeiten</button>
+        <button class="btn-danger" type="submit" style="margin-top:1rem">Ausgewählte löschen</button>
+        <span class="bhint">höchstens {{ max_selected }} Artikel pro Lauf</span>{% endif %}
     </form>
     {% endif %}
 
@@ -296,11 +333,101 @@
 <script>
 let wasRunning = {% if running %}true{% else %}false{% endif %};
 
+const PROCESS_ONE_URL = '{% url "control_process_one" %}';
+const BOARD_CSRF      = '{{ csrf_token }}';
+const BOARD_NEXT      = '{{ request.get_full_path }}';
+
+// The board is dismissed per run, so the reload at the end of a job cannot
+// bring back a board that was just closed — while the next run still gets one.
+const DISMISS_KEY = 'control-board-dismissed';
+
+function dismissedRun() {
+    // Private windows can refuse sessionStorage outright; a board that always
+    // shows is better than a panel whose script died on the attempt.
+    try { return sessionStorage.getItem(DISMISS_KEY); } catch (e) { return null; }
+}
+
+function retryForm(pk) {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = PROCESS_ONE_URL;
+    for (const [name, value] of [['csrfmiddlewaretoken', BOARD_CSRF], ['pk', pk], ['next', BOARD_NEXT]]) {
+        const field = document.createElement('input');
+        field.type = 'hidden'; field.name = name; field.value = value;
+        form.appendChild(field);
+    }
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.className = 'btn-ghost-sm';
+    button.textContent = 'Nochmal';
+    form.appendChild(button);
+    return form;
+}
+
+function renderBoard(board) {
+    const card = document.getElementById('board-card');
+    if (!card) return;                 // another tab — no board on this page
+    if (!board || String(board.run_id) === dismissedRun()) {
+        card.style.display = 'none';
+        return;
+    }
+    card.dataset.run     = board.run_id;
+    card.style.display   = '';
+    document.getElementById('board-summary').textContent = board.summary || '';
+
+    const body = document.getElementById('board-rows');
+    body.textContent = '';
+    for (const item of board.items) {
+        const row = document.createElement('tr');
+
+        const title = document.createElement('td');
+        title.className = 'ttl';
+        // Article titles come from the news feed, so they are written as text
+        // and never as markup.
+        title.textContent = item.title;
+
+        const state = document.createElement('td');
+        const pill  = document.createElement('span');
+        pill.className   = 'pill ' + item.css;
+        pill.textContent = item.label;
+        state.appendChild(pill);
+
+        const step = document.createElement('td');
+        step.className = 'bstep';
+        step.textContent = item.step || '';
+
+        const hint = document.createElement('td');
+        hint.className = 'berr';
+        hint.textContent = item.error || '';
+
+        const action = document.createElement('td');
+        if (item.retry) action.appendChild(retryForm(item.pk));
+
+        row.append(title, state, step, hint, action);
+        body.appendChild(row);
+    }
+}
+
+const boardCard  = document.getElementById('board-card');
+const boardClose = document.getElementById('board-close');
+if (boardClose) {
+    boardClose.addEventListener('click', () => {
+        try { sessionStorage.setItem(DISMISS_KEY, boardCard.dataset.run || ''); } catch (e) {}
+        boardCard.style.display = 'none';
+    });
+}
+// A board rendered by the server still has to respect an earlier dismissal.
+if (boardCard && boardCard.dataset.run && boardCard.dataset.run === dismissedRun()) {
+    boardCard.style.display = 'none';
+}
+
 async function poll() {
     try {
         const r = await fetch('{% url "control_status" %}');
         const d = await r.json();
         const card = document.getElementById('live-card');
+
+        renderBoard(d.board);
 
         if (d.running) {
             wasRunning = true;

@@ -1,4 +1,5 @@
 import datetime
+from collections import Counter
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -20,6 +21,34 @@ STATUS_CHOICES = [
     ('cancelled', 'Abgebrochen'),
 ]
 
+# Per-article states on the "Verarbeitung" board. They live here rather than in
+# the template so the server-rendered board, the polling JSON and the summary
+# line cannot drift apart.
+ITEM_LABELS = {
+    'queued':     'wartet',
+    'running':    'läuft',
+    'done':       'fertig',
+    'incomplete': 'unvollständig',
+    'failed':     'Fehler',
+    'skipped':    'übersprungen',
+    'cancelled':  'abgebrochen',
+}
+
+# Pill colours per state, sent along with the JSON so the polling script does
+# not keep a second copy of this map.
+ITEM_CSS = {
+    'queued':     'p-wait',
+    'running':    'p-run',
+    'done':       'p-done',
+    'incomplete': 'p-inc',
+    'failed':     'p-err',
+    'skipped':    'p-free',
+    'cancelled':  'p-free',
+}
+
+# Summary line order: what came out of the run first, what is still open last.
+SUMMARY_ORDER = ['done', 'incomplete', 'failed', 'skipped', 'cancelled']
+
 # A job whose heartbeat is older than this is treated as dead (server was killed
 # mid-run), so a stale "running" row can never block the panel forever.
 STALE_AFTER = timezone.timedelta(minutes=10)
@@ -36,6 +65,10 @@ class JobRun(models.Model):
     current      = models.CharField(max_length=300, blank=True)
     log          = models.TextField(blank=True)
     error        = models.TextField(blank=True)
+
+    # One row per article for the processing board:
+    # {'pk', 'title', 'state', 'step', 'error'}.
+    items        = models.JSONField(default=list, blank=True)
 
     cancel_requested = models.BooleanField(default=False)
 
@@ -60,6 +93,32 @@ class JobRun(models.Model):
 
     def progress(self, done, current=''):
         self.beat(done_count=done, current=current[:300])
+
+    def set_item(self, index, **fields):
+        """
+        Patch one board row.
+
+        A JSONField has no partial update, so the whole list is written back;
+        going through beat() means a long AI call on one article still moves
+        the heartbeat and the run cannot look dead to the panel.
+        """
+        items = list(self.items or [])
+        if not 0 <= index < len(items):
+            return
+        items[index] = {**items[index], **fields}
+        self.beat(items=items)
+
+    @property
+    def item_summary(self):
+        """Counts for the board header, e.g. 2 fertig · 1 Fehler · 3 offen."""
+        counts = Counter(item.get('state', '') for item in (self.items or []))
+        parts = [f'{counts[state]} {ITEM_LABELS[state]}'
+                 for state in SUMMARY_ORDER if counts[state]]
+        # "wartet" and "läuft" read as one figure here: how much is left.
+        still_open = counts['queued'] + counts['running']
+        if still_open:
+            parts.append(f'{still_open} offen')
+        return ' · '.join(parts)
 
     def log_line(self, text):
         self.log = (self.log or '') + text.rstrip() + '\n'

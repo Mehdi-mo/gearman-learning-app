@@ -13,9 +13,64 @@ from articles.models import (Article, Conversation, NomenVerbExercise,
                              NomenVerbVerbindung, PrepositionExercise, PrepositionLesson)
 
 from . import runner
-from .models import JOB_CHOICES, JobRun, Schedule
+from .models import ITEM_CSS, ITEM_LABELS, JOB_CHOICES, JobRun, Schedule
 
 PAGE_SIZE = 25
+
+# One hand-picked selection per job. Fifty articles are already hours of AI
+# calls, and a longer list is far more likely to be a mis-click than a plan.
+MAX_SELECTED = 50
+
+# How far back to look for a board when the newest run has none. A run that
+# found nothing to do leaves `items` empty, and that should not wipe the board
+# of the run before it — which may be the only place a failure is recorded.
+BOARD_LOOKBACK = 5
+
+
+def _board(run):
+    """
+    The "Verarbeitung" board for one run, or None when there is nothing to show.
+
+    Labels and pill classes are resolved here, so the server-rendered board and
+    the polled one cannot disagree about what a state is called.
+    """
+    if run is None or not run.items:
+        return None
+    return {
+        'run_id':  run.pk,
+        'job':     run.get_job_display(),
+        'status':  run.status,
+        'summary': run.item_summary,
+        'items': [{
+            'pk':    item.get('pk'),
+            'title': item.get('title') or '',
+            'state': item.get('state') or '',
+            'label': ITEM_LABELS.get(item.get('state'), item.get('state') or ''),
+            'css':   ITEM_CSS.get(item.get('state'), 'p-free'),
+            'step':  item.get('step') or '',
+            'error': item.get('error') or '',
+            # Only a row that came back wrong is worth another AI call.
+            'retry': item.get('state') in ('failed', 'incomplete'),
+        } for item in run.items],
+    }
+
+
+def _latest_board(running=None):
+    """
+    Board data for the panel and for the poll.
+
+    A finished run keeps its board, so a failure is not lost the second the job
+    ends — the admin needs it exactly then.
+    """
+    if running is not None and running.job == 'process_articles':
+        board = _board(running)
+        if board:
+            return board
+    for run in JobRun.objects.filter(job='process_articles')[:BOARD_LOOKBACK]:
+        board = _board(run)
+        if board:
+            return board
+    return None
 
 
 def _int(value, default, minimum=1, maximum=None):
@@ -184,6 +239,8 @@ def panel(request):
     for job, _label in JOB_CHOICES:
         Schedule.objects.get_or_create(job=job)
 
+    running = runner.active_run()
+
     return render(request, 'control/panel.html', {
         'counts':      _counts(),
         'tab':         tab,
@@ -198,7 +255,10 @@ def panel(request):
         'page_count':  max(1, -(-row_total // PAGE_SIZE)),
         'has_prev':    page > 1,
         'has_next':    start + PAGE_SIZE < row_total,
-        'running':     runner.active_run(),
+        'running':     running,
+        # Rendered straight away, so the board is there before the first poll.
+        'board':       _latest_board(running),
+        'max_selected': MAX_SELECTED,
         'schedules':   Schedule.objects.all(),
         'history':     JobRun.objects.all()[:12],
         'job_choices': JOB_CHOICES,
@@ -220,6 +280,8 @@ def status(request):
                 'log':    last.log[-1500:],
             } if last else None,
             'counts': _counts(),
+            # Sent while idle too: the board has to survive the end of the job.
+            'board':  _latest_board(),
         })
 
     return JsonResponse({
@@ -231,6 +293,7 @@ def status(request):
         'current': run.current,
         'log':     run.log[-1500:],
         'counts':  _counts(),
+        'board':   _latest_board(run),
     })
 
 
@@ -347,6 +410,53 @@ def process_one(request):
     else:
         messages.success(request, 'Verarbeitung gestartet.')
     return redirect(request.POST.get('next') or 'control_panel')
+
+
+@staff_member_required
+@require_POST
+def process_selected(request):
+    """
+    Process the ticked articles in one job, in the order the list shows them.
+
+    This rides the delete form's checkboxes, so `ids` arrives here exactly as
+    it does for a bulk delete. Articles that are already finished are skipped
+    by the job itself rather than filtered out here — the board then says
+    "übersprungen" for them, instead of leaving the admin wondering where the
+    row went.
+    """
+    back = request.POST.get('next') or 'control_panel'
+
+    pks = []
+    for raw in request.POST.getlist('ids'):
+        if raw.isdigit() and int(raw) not in pks:
+            pks.append(int(raw))
+
+    if not pks:
+        messages.error(request, 'Nichts ausgewählt.')
+        return redirect(back)
+    if len(pks) > MAX_SELECTED:
+        messages.error(request, f'Höchstens {MAX_SELECTED} Artikel pro Lauf — '
+                                f'{len(pks)} ausgewählt.')
+        return redirect(back)
+
+    # Ids that no longer exist are dropped here, while there is still a page to
+    # report it on; the job itself would only reach the log.
+    existing = set(Article.objects.filter(pk__in=pks).values_list('pk', flat=True))
+    pks      = [pk for pk in pks if pk in existing]
+    if not pks:
+        messages.error(request, 'Keiner der ausgewählten Artikel wurde gefunden.')
+        return redirect(back)
+
+    run, err = runner.start_job(
+        'process_articles',
+        {'count': len(pks), 'only_pks': pks},
+        triggered_by='admin',
+    )
+    if err:
+        messages.error(request, err)
+    else:
+        messages.success(request, f'Verarbeitung von {len(pks)} Artikeln gestartet.')
+    return redirect(back)
 
 
 GRANT_DAYS = 30

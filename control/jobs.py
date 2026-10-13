@@ -91,12 +91,78 @@ def missing_parts(article):
     return ' | '.join(gaps)
 
 
+# The four AI calls one article costs, spelled out for the board.
+STEPS = (
+    'Texte (1/4)',
+    'Stufe A1/A2 (2/4)',
+    'Stufe B1/B2 (3/4)',
+    'Stufe C1 (4/4)',
+)
+
+
+def _selected_articles(run, raw_pks):
+    """
+    The articles behind `only_pks`, in the order the panel sent them.
+
+    Order matters: the board lists the rows the way the admin ticked them, so
+    the queryset cannot be taken as it comes back. An id that is not a number
+    or no longer exists is logged and dropped — raising here would happen
+    inside the worker thread, where the only trace is a failed JobRun row.
+    """
+    pks = []
+    for raw in raw_pks:
+        try:
+            pk = int(raw)
+        except (TypeError, ValueError):
+            run.log_line(f'Ungültige Artikel-ID: {raw!r}')
+            continue
+        if pk not in pks:
+            pks.append(pk)
+
+    by_pk    = Article.objects.in_bulk(pks)
+    articles = []
+    for pk in pks:
+        article = by_pk.get(pk)
+        if article is None:
+            run.log_line(f'Artikel {pk} nicht gefunden.')
+            continue
+        articles.append(article)
+    return articles
+
+
+def _cancel_rest(run, from_index):
+    """
+    Mark the rows a stopped run never reached.
+
+    Left alone they would stay on "wartet", which reads as a job that is still
+    going to come back to them.
+    """
+    items = list(run.items or [])
+    for item in items[from_index:]:
+        if item.get('state') in ('queued', 'running'):
+            item['state'] = 'cancelled'
+            item['step']  = ''
+    run.beat(items=items)
+
+
 def process_articles(run, params):
     from articles.ai_processor import generate_versions, generate_vocab_and_grammar
 
-    count = max(1, int(params.get('count', 10)))
-    only  = params.get('only_pk')
-    if only:
+    count    = max(1, int(params.get('count', 10)))
+    only     = params.get('only_pk')
+    only_pks = params.get('only_pks') or []
+
+    # Articles ticked by hand are processed in that order, and only this path
+    # leaves the finished ones alone: "Jetzt" and the scheduled run pick their
+    # own articles, so there is nothing there to protect from a mis-click.
+    skip_done = bool(only_pks)
+
+    if only_pks:
+        articles = _selected_articles(run, only_pks)
+        if not articles:
+            run.log_line('Keine gültigen Artikel ausgewählt.')
+            return
+    elif only:
         # A pk that is not a number would raise inside the worker thread, where
         # the only trace is a failed JobRun row.
         try:
@@ -115,23 +181,43 @@ def process_articles(run, params):
         run.log_line('Keine unverarbeiteten Artikel.')
         return
 
-    ok = failed = 0
+    run.beat(items=[
+        {'pk': a.pk, 'title': a.title[:120], 'state': 'queued', 'step': '', 'error': ''}
+        for a in articles
+    ])
+
+    ok = failed = skipped = 0
     for i, article in enumerate(articles, 1):
+        index = i - 1
         if run.is_cancelled():
             run.log_line('Abgebrochen.')
+            _cancel_rest(run, index)
             return
-        run.progress(i - 1, article.title[:90])
+        run.progress(index, article.title[:90])
 
+        if skip_done and article.is_processed:
+            # No AI call and not a failure — a row that was already done is
+            # left exactly as it is.
+            skipped += 1
+            run.set_item(index, state='skipped', step='schon fertig')
+            run.log_line('ÜBERSPRUNGEN  ' + article.title[:70] + ': schon fertig')
+            run.progress(i, article.title[:90])
+            continue
+
+        run.set_item(index, state='running', step=STEPS[0], error='')
         try:
             v_a1, v_b1, v_c1 = generate_versions(article.title, article.original_text)
             article.version_a1_a2, article.version_b1_b2, article.version_c1 = v_a1, v_b1, v_c1
 
+            run.set_item(index, step=STEPS[1])
             time.sleep(PAUSE_BETWEEN_CALLS)
             article.vocab_a1_a2, article.verbs_a1_a2, article.grammar_a1_a2 = \
                 generate_vocab_and_grammar('a1_a2', v_a1)
+            run.set_item(index, step=STEPS[2])
             time.sleep(PAUSE_BETWEEN_CALLS)
             article.vocab_b1_b2, article.verbs_b1_b2, article.grammar_b1_b2 = \
                 generate_vocab_and_grammar('b1_b2', v_b1)
+            run.set_item(index, step=STEPS[3])
             time.sleep(PAUSE_BETWEEN_CALLS)
             article.vocab_c1, article.verbs_c1, article.grammar_c1 = \
                 generate_vocab_and_grammar('c1', v_c1)
@@ -144,13 +230,16 @@ def process_articles(run, params):
             article.save()
             if article.is_processed:
                 ok += 1
+                run.set_item(index, state='done', step='')
                 run.log_line('OK  ' + article.title[:70])
             else:
                 failed += 1
-                run.log_line('UNVOLLSTÄNDIG  ' + article.title[:50]
-                             + ': ' + missing_parts(article))
+                gaps = missing_parts(article)
+                run.set_item(index, state='incomplete', step='', error=gaps)
+                run.log_line('UNVOLLSTÄNDIG  ' + article.title[:50] + ': ' + gaps)
         except Exception as e:
             failed += 1
+            run.set_item(index, state='failed', step='', error=str(e)[:200])
             run.log_line('FEHLER  ' + article.title[:50] + ': ' + str(e)[:120])
 
         run.progress(i, article.title[:90])
@@ -158,7 +247,10 @@ def process_articles(run, params):
             time.sleep(PAUSE_BETWEEN_ARTICLES)
 
     remaining = Article.objects.filter(is_processed=False).count()
-    run.log_line(f'Fertig: {ok} verarbeitet, {failed} fehlgeschlagen, {remaining} warten noch.')
+    note = f'Fertig: {ok} verarbeitet, {failed} fehlgeschlagen, {remaining} warten noch.'
+    if skipped:
+        note += f' {skipped} übersprungen.'
+    run.log_line(note)
 
 
 def generate_conversations(run, params):

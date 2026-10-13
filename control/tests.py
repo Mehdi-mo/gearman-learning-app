@@ -21,9 +21,12 @@ from articles.models import Article, Conversation
 from accounts.tests import verb_card, vocab_card
 from articles.tests import BROKEN_VERB, card_without, complete_article
 
-from .jobs import generate_conversations, missing_parts, process_articles
-from .models import JOB_CHOICES, JobRun, Schedule
-from .views import (_counts, _user_rows, GRANT_DAYS, PAGE_SIZE, RECHECK_CHUNK,
+from .jobs import (STEPS, _cancel_rest, _selected_articles,
+                   generate_conversations, missing_parts, process_articles)
+from .models import (ITEM_CSS, ITEM_LABELS, JOB_CHOICES, SUMMARY_ORDER,
+                     JobRun, Schedule)
+from .views import (_board, _counts, _latest_board, _user_rows, BOARD_LOOKBACK,
+                    GRANT_DAYS, MAX_SELECTED, PAGE_SIZE, RECHECK_CHUNK,
                     USER_FILTERS)
 
 
@@ -1941,3 +1944,1063 @@ class GenerateConversationsJobTests(TestCase):
         self.assertEqual(Conversation.objects.count(), 0)
         self.assertIn('FEHLER  [b1_b2]', self.run.log)
         self.assertIn('Fertig: 0 erstellt, 1 fehlgeschlagen.', self.run.log)
+
+
+
+# ---------------------------------------------------------------------------
+# JobRun.items: the per-article board rows
+# ---------------------------------------------------------------------------
+
+def board_item(pk=1, title='Artikel', state='queued', step='', error=''):
+    """One board row shaped the way process_articles writes them."""
+    return {'pk': pk, 'title': title, 'state': state, 'step': step, 'error': error}
+
+
+class JobRunItemSummaryTests(TestCase):
+    """
+    The header line of the board. Finished states come first in SUMMARY_ORDER,
+    then "wartet" and "läuft" collapsed into one "N offen" — the admin only
+    cares how much is left, not which of the two it is sitting in.
+    """
+
+    def make(self, *states):
+        return JobRun.objects.create(
+            job='process_articles',
+            items=[board_item(pk=i, state=state)
+                   for i, state in enumerate(states, 1)],
+        )
+
+    def test_a_run_without_items_has_an_empty_summary(self):
+        run = JobRun.objects.create(job='process_articles')
+        self.assertEqual(run.item_summary, '')
+
+    def test_queued_and_running_are_collapsed_into_one_open_count(self):
+        self.assertEqual(self.make('queued', 'running', 'queued').item_summary,
+                         '3 offen')
+
+    def test_finished_states_come_before_the_open_count(self):
+        run = self.make('done', 'done', 'failed', 'queued', 'running', 'queued')
+        self.assertEqual(run.item_summary, '2 fertig · 1 Fehler · 3 offen')
+
+    def test_zero_counts_are_left_out(self):
+        self.assertEqual(self.make('done', 'done').item_summary, '2 fertig')
+
+    def test_every_state_keeps_the_summary_order(self):
+        run = self.make('cancelled', 'skipped', 'failed', 'incomplete', 'done')
+        self.assertEqual(
+            run.item_summary,
+            '1 fertig · 1 unvollständig · 1 Fehler · 1 übersprungen · 1 abgebrochen')
+
+    def test_the_summary_wording_comes_from_the_shared_labels(self):
+        self.assertEqual(
+            [ITEM_LABELS[state] for state in SUMMARY_ORDER],
+            ['fertig', 'unvollständig', 'Fehler', 'übersprungen', 'abgebrochen'])
+
+    def test_a_row_with_an_unreadable_state_is_not_counted(self):
+        self.assertEqual(self.make('done', 'kaputt').item_summary, '1 fertig')
+
+    def test_a_row_without_a_state_key_is_not_counted(self):
+        run = JobRun.objects.create(job='process_articles',
+                                    items=[{'pk': 1, 'title': 'Artikel'}])
+        self.assertEqual(run.item_summary, '')
+
+
+class JobRunSetItemTests(TestCase):
+    """
+    A JSONField has no partial update, so set_item() rewrites the whole list —
+    and does it through beat(), so a long AI call on one article still moves
+    the heartbeat and the run cannot look dead to the panel.
+    """
+
+    def setUp(self):
+        self.rows = [board_item(pk=7, title='Erster'),
+                     board_item(pk=8, title='Zweiter')]
+        self.run = JobRun.objects.create(job='process_articles',
+                                         items=[dict(r) for r in self.rows])
+
+    def fresh(self):
+        return JobRun.objects.get(pk=self.run.pk)
+
+    def test_set_item_patches_only_the_named_fields_of_one_row(self):
+        self.run.set_item(1, state='running', step=STEPS[0])
+
+        self.assertEqual(self.fresh().items[1],
+                         board_item(pk=8, title='Zweiter',
+                                    state='running', step=STEPS[0]))
+        self.assertEqual(self.fresh().items[0], self.rows[0])
+
+    def test_set_item_updates_the_database_and_the_instance(self):
+        self.run.set_item(0, state='done')
+
+        self.assertEqual(self.run.items[0]['state'], 'done')
+        self.assertEqual(self.fresh().items[0]['state'], 'done')
+
+    def test_set_item_moves_the_heartbeat(self):
+        before = self.fresh().heartbeat
+        self.run.set_item(0, state='running')
+
+        self.assertGreater(self.fresh().heartbeat, before)
+
+    def test_an_index_past_the_end_is_a_no_op(self):
+        self.run.set_item(5, state='done')
+
+        self.assertEqual(self.fresh().items, self.rows)
+
+    def test_an_index_exactly_at_the_end_is_a_no_op(self):
+        self.run.set_item(2, state='done')
+
+        self.assertEqual(self.fresh().items, self.rows)
+
+    def test_a_negative_index_is_a_no_op(self):
+        self.run.set_item(-1, state='done')
+
+        self.assertEqual(self.fresh().items, self.rows)
+
+    def test_set_item_on_a_run_without_items_is_a_no_op(self):
+        run = JobRun.objects.create(job='process_articles')
+        run.set_item(0, state='done')
+
+        self.assertEqual(JobRun.objects.get(pk=run.pk).items, [])
+
+
+# ---------------------------------------------------------------------------
+# jobs._cancel_rest(): the rows a stopped run never reached
+# ---------------------------------------------------------------------------
+
+class CancelRestTests(TestCase):
+    def test_queued_and_running_rows_become_cancelled(self):
+        run = JobRun.objects.create(
+            job='process_articles',
+            items=[board_item(pk=1, state='done'),
+                   board_item(pk=2, state='running', step=STEPS[2]),
+                   board_item(pk=3, state='queued')],
+        )
+
+        _cancel_rest(run, 1)
+
+        states = [i['state'] for i in JobRun.objects.get(pk=run.pk).items]
+        self.assertEqual(states, ['done', 'cancelled', 'cancelled'])
+
+    def test_a_cancelled_row_loses_its_step(self):
+        run = JobRun.objects.create(
+            job='process_articles',
+            items=[board_item(pk=1, state='running', step=STEPS[1])])
+
+        _cancel_rest(run, 0)
+
+        self.assertEqual(JobRun.objects.get(pk=run.pk).items[0]['step'], '')
+
+    def test_rows_that_already_came_back_are_left_alone(self):
+        run = JobRun.objects.create(
+            job='process_articles',
+            items=[board_item(pk=1, state='failed', error='429'),
+                   board_item(pk=2, state='incomplete', error='C1: Wörter'),
+                   board_item(pk=3, state='skipped', step='schon fertig')],
+        )
+
+        _cancel_rest(run, 0)
+
+        rows = JobRun.objects.get(pk=run.pk).items
+        self.assertEqual([r['state'] for r in rows],
+                         ['failed', 'incomplete', 'skipped'])
+        self.assertEqual(rows[1]['error'], 'C1: Wörter')
+
+    def test_rows_before_the_index_are_never_touched(self):
+        run = JobRun.objects.create(
+            job='process_articles',
+            items=[board_item(pk=1, state='queued'),
+                   board_item(pk=2, state='queued')])
+
+        _cancel_rest(run, 1)
+
+        states = [i['state'] for i in JobRun.objects.get(pk=run.pk).items]
+        self.assertEqual(states, ['queued', 'cancelled'])
+
+
+# ---------------------------------------------------------------------------
+# jobs._selected_articles(): order, garbage and unknown ids
+# ---------------------------------------------------------------------------
+
+class SelectedArticlesTests(TestCase):
+    def setUp(self):
+        self.run = JobRun.objects.create(job='process_articles', status='running')
+        self.first  = Article.objects.create(title='Eins', original_text='T1')
+        self.second = Article.objects.create(title='Zwei', original_text='T2')
+
+    def log(self):
+        return JobRun.objects.get(pk=self.run.pk).log
+
+    def test_the_order_the_panel_sent_is_kept(self):
+        picked = _selected_articles(self.run, [self.second.pk, self.first.pk])
+
+        self.assertEqual([a.pk for a in picked],
+                         [self.second.pk, self.first.pk])
+
+    def test_a_repeated_id_appears_once(self):
+        picked = _selected_articles(
+            self.run, [self.first.pk, self.first.pk, str(self.first.pk)])
+
+        self.assertEqual([a.pk for a in picked], [self.first.pk])
+
+    def test_a_non_numeric_id_is_logged_and_dropped(self):
+        picked = _selected_articles(self.run, ['abc', self.first.pk])
+
+        self.assertEqual([a.pk for a in picked], [self.first.pk])
+        self.assertIn('Ungültige Artikel-ID', self.log())
+
+    def test_a_none_id_is_logged_and_dropped(self):
+        self.assertEqual(_selected_articles(self.run, [None]), [])
+        self.assertIn('Ungültige Artikel-ID', self.log())
+
+    def test_an_id_that_no_longer_exists_is_logged_and_dropped(self):
+        picked = _selected_articles(self.run, [self.first.pk, 999999])
+
+        self.assertEqual([a.pk for a in picked], [self.first.pk])
+        self.assertIn('Artikel 999999 nicht gefunden.', self.log())
+
+    def test_numeric_strings_are_accepted(self):
+        picked = _selected_articles(self.run, [str(self.first.pk)])
+
+        self.assertEqual([a.pk for a in picked], [self.first.pk])
+
+
+# ---------------------------------------------------------------------------
+# jobs.process_articles(): the board rows through a whole mocked run
+# ---------------------------------------------------------------------------
+
+class ProcessArticlesBoardTests(TestCase):
+    """
+    The same patching rules as ProcessArticlesJobTests: generate_versions and
+    generate_vocab_and_grammar are imported inside the function body, so
+    patching them on articles.ai_processor keeps every provider out, and
+    control.jobs.time.sleep is neutralised.
+
+    Each mocked AI call snapshots the board out of the database first, so the
+    states and steps are checked while the run is still going.
+    """
+
+    def setUp(self):
+        self.run = JobRun.objects.create(job='process_articles', status='running')
+        sleeper = patch('control.jobs.time.sleep')
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+        self.seen = []
+
+    def items(self):
+        return JobRun.objects.get(pk=self.run.pk).items
+
+    def snapshot(self):
+        self.seen.append([(i['state'], i['step']) for i in self.items()])
+
+    def run_job(self, params, cards=None, versions=None):
+        def versions_side(title, text):
+            self.snapshot()
+            return versions(title, text) if versions else VERSIONS
+
+        def cards_side(level, text):
+            self.snapshot()
+            return (cards or fake_cards)(level, text)
+
+        with patch('articles.ai_processor.generate_versions',
+                   side_effect=versions_side) as versions_mock, \
+             patch('articles.ai_processor.generate_vocab_and_grammar',
+                   side_effect=cards_side) as cards_mock:
+            process_articles(self.run, params)
+        self.run.refresh_from_db()
+        return versions_mock, cards_mock
+
+    # --- the row itself ---------------------------------------------------
+
+    def test_a_row_carries_the_pk_and_the_title(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 10})
+
+        row = self.items()[0]
+        self.assertEqual(row['pk'], article.pk)
+        self.assertEqual(row['title'], 'Rohartikel')
+
+    def test_a_very_long_title_is_cut_for_the_board(self):
+        Article.objects.create(title='A' * 300, original_text='Text')
+
+        self.run_job({'count': 10})
+
+        self.assertEqual(len(self.items()[0]['title']), 120)
+
+    def test_one_row_per_article(self):
+        Article.objects.create(title='Eins', original_text='T1')
+        Article.objects.create(title='Zwei', original_text='T2')
+
+        self.run_job({'count': 10})
+
+        self.assertEqual(len(self.items()), 2)
+
+    # --- the lifecycle ----------------------------------------------------
+
+    def test_the_step_walks_through_the_four_ai_calls(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 10})
+
+        self.assertEqual(self.seen, [[('running', STEPS[0])],
+                                     [('running', STEPS[1])],
+                                     [('running', STEPS[2])],
+                                     [('running', STEPS[3])]])
+
+    def test_a_row_that_has_not_been_reached_yet_still_says_queued(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        self.run_job({'count': 10, 'only_pks': [first.pk, second.pk]})
+
+        self.assertEqual(self.seen[0], [('running', STEPS[0]), ('queued', '')])
+
+    def test_a_finished_article_ends_as_done_with_no_step_and_no_error(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 10})
+
+        self.assertEqual(self.items()[0]['state'], 'done')
+        self.assertEqual(self.items()[0]['step'], '')
+        self.assertEqual(self.items()[0]['error'], '')
+
+    def test_an_incomplete_result_ends_as_incomplete_with_the_gaps(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 10}, cards=cards_without('b1_b2', 'vocab'))
+
+        row = self.items()[0]
+        self.assertEqual(row['state'], 'incomplete')
+        self.assertEqual(row['step'], '')
+        self.assertIn('B1/B2: Wörter', row['error'])
+
+    def test_a_thin_card_list_also_ends_as_incomplete(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 10}, cards=cards_thin_at('c1', 'verbs'))
+
+        row = self.items()[0]
+        self.assertEqual(row['state'], 'incomplete')
+        self.assertIn('C1: Verben unvollständig (1)', row['error'])
+
+    def test_a_failing_provider_ends_as_failed_with_the_error_text(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        def boom(title, text):
+            raise RuntimeError('429 rate limit')
+
+        self.run_job({'count': 10}, versions=boom)
+
+        row = self.items()[0]
+        self.assertEqual(row['state'], 'failed')
+        self.assertEqual(row['step'], '')
+        self.assertIn('429 rate limit', row['error'])
+
+    def test_a_very_long_provider_error_is_cut_for_the_board(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        def boom(title, text):
+            raise RuntimeError('x' * 500)
+
+        self.run_job({'count': 10}, versions=boom)
+
+        self.assertEqual(len(self.items()[0]['error']), 200)
+
+    def test_a_board_left_over_from_an_earlier_run_is_replaced(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+        self.run.items = [board_item(pk=article.pk, title='Rohartikel',
+                                     state='failed', error='429 rate limit')]
+        self.run.save(update_fields=['items'])
+
+        self.run_job({'count': 10})
+
+        self.assertEqual(len(self.items()), 1)
+        self.assertEqual(self.items()[0]['state'], 'done')
+        self.assertEqual(self.items()[0]['error'], '')
+
+    def test_a_mixed_batch_keeps_one_state_per_row(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        def cards(level, text):
+            vocab, verbs, grammar = fake_cards(level, text)
+            if level == 'c1' and text.endswith('Zwei'):
+                verbs = []
+            return vocab, verbs, grammar
+
+        def versions(title, text):
+            return (f'A1 {title}', f'B1 {title}', f'C1 {title}')
+
+        self.run_job({'count': 10, 'only_pks': [first.pk, second.pk]},
+                     cards=cards, versions=versions)
+
+        rows = self.items()
+        self.assertEqual([r['state'] for r in rows], ['done', 'incomplete'])
+        self.assertEqual(rows[0]['error'], '')
+        self.assertIn('C1: Verben', rows[1]['error'])
+
+    def test_an_empty_queue_leaves_the_board_empty(self):
+        self.run_job({'count': 10})
+
+        self.assertEqual(self.items(), [])
+        self.assertIn('Keine unverarbeiteten Artikel.', self.run.log)
+
+    # --- cancellation -----------------------------------------------------
+
+    def test_cancelling_turns_every_remaining_row_into_cancelled(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+        third  = Article.objects.create(title='Drei', original_text='T3')
+
+        def versions(title, text):
+            # The admin hits "Stoppen" while the first article is in flight.
+            JobRun.objects.filter(pk=self.run.pk).update(cancel_requested=True)
+            return VERSIONS
+
+        self.run_job({'count': 10,
+                      'only_pks': [first.pk, second.pk, third.pk]},
+                     versions=versions)
+
+        rows = self.items()
+        self.assertEqual([r['state'] for r in rows],
+                         ['done', 'cancelled', 'cancelled'])
+        self.assertEqual([r['step'] for r in rows[1:]], ['', ''])
+        self.assertIn('Abgebrochen.', self.run.log)
+        self.assertNotIn('Fertig:', self.run.log)
+
+    def test_a_cancelled_run_summarises_what_it_managed(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        def versions(title, text):
+            JobRun.objects.filter(pk=self.run.pk).update(cancel_requested=True)
+            return VERSIONS
+
+        self.run_job({'count': 10, 'only_pks': [first.pk, second.pk]},
+                     versions=versions)
+
+        self.assertEqual(self.run.item_summary, '1 fertig · 1 abgebrochen')
+
+
+class ProcessArticlesSkipTests(TestCase):
+    """
+    Only the hand-picked path leaves a finished article alone. "Jetzt" and the
+    scheduled run pick their own articles, so there is no mis-click to protect
+    them from — and only_pk must still reprocess on demand.
+    """
+
+    def setUp(self):
+        self.run = JobRun.objects.create(job='process_articles', status='running')
+        sleeper = patch('control.jobs.time.sleep')
+        self.sleep = sleeper.start()
+        self.addCleanup(sleeper.stop)
+
+    def run_job(self, params, cards=fake_cards):
+        with patch('articles.ai_processor.generate_versions',
+                   return_value=VERSIONS) as versions_mock, \
+             patch('articles.ai_processor.generate_vocab_and_grammar',
+                   side_effect=cards) as cards_mock:
+            process_articles(self.run, params)
+        self.run.refresh_from_db()
+        return versions_mock, cards_mock
+
+    def items(self):
+        return JobRun.objects.get(pk=self.run.pk).items
+
+    def test_only_pks_skips_an_article_that_is_already_processed(self):
+        done = complete_article(title='Schon fertig', is_processed=True)
+        raw  = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        versions_mock, cards_mock = self.run_job(
+            {'count': 2, 'only_pks': [done.pk, raw.pk]})
+
+        versions_mock.assert_called_once_with('Rohartikel', 'Text')
+        self.assertEqual(cards_mock.call_count, 3)
+        rows = self.items()
+        self.assertEqual(rows[0]['state'], 'skipped')
+        self.assertEqual(rows[0]['step'], 'schon fertig')
+        self.assertEqual(rows[1]['state'], 'done')
+
+    def test_a_skipped_article_is_logged_as_uebersprungen(self):
+        done = complete_article(title='Schon fertig', is_processed=True)
+        raw  = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 2, 'only_pks': [done.pk, raw.pk]})
+
+        self.assertIn('ÜBERSPRUNGEN  Schon fertig: schon fertig', self.run.log)
+
+    def test_the_closing_line_counts_the_skipped_articles(self):
+        done = complete_article(title='Schon fertig', is_processed=True)
+        raw  = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 2, 'only_pks': [done.pk, raw.pk]})
+
+        self.assertIn('Fertig: 1 verarbeitet, 0 fehlgeschlagen, 0 warten noch.'
+                      ' 1 übersprungen.', self.run.log)
+
+    def test_nothing_skipped_leaves_the_closing_line_alone(self):
+        raw = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 1, 'only_pks': [raw.pk]})
+
+        self.assertIn('Fertig: 1 verarbeitet, 0 fehlgeschlagen, 0 warten noch.',
+                      self.run.log)
+        self.assertNotIn('übersprungen', self.run.log)
+
+    def test_a_skipped_article_keeps_its_content_untouched(self):
+        done = complete_article(title='Schon fertig', is_processed=True)
+
+        versions_mock, cards_mock = self.run_job(
+            {'count': 1, 'only_pks': [done.pk]})
+
+        versions_mock.assert_not_called()
+        cards_mock.assert_not_called()
+        done.refresh_from_db()
+        self.assertTrue(done.is_processed)
+        self.assertEqual(done.version_a1_a2, 'Einfacher Text.')
+
+    def test_only_pk_does_not_skip_an_article_that_is_already_processed(self):
+        done = complete_article(title='Schon fertig', is_processed=True)
+
+        versions_mock, _ = self.run_job({'count': 1, 'only_pk': done.pk})
+
+        versions_mock.assert_called_once()
+        done.refresh_from_db()
+        self.assertEqual(done.version_a1_a2, 'Einfacher Text.')
+        self.assertEqual(self.items()[0]['state'], 'done')
+        self.assertNotIn('ÜBERSPRUNGEN', self.run.log)
+        self.assertNotIn('übersprungen', self.run.log)
+
+    def test_the_plain_count_path_never_reports_a_skip(self):
+        complete_article(title='Schon fertig', is_processed=True)
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        versions_mock, _ = self.run_job({'count': 10})
+
+        versions_mock.assert_called_once_with('Rohartikel', 'Text')
+        self.assertEqual(len(self.items()), 1)
+        self.assertNotIn('übersprungen', self.run.log)
+
+    def test_only_pks_keeps_the_order_the_panel_sent(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+        third  = Article.objects.create(title='Drei', original_text='T3')
+
+        self.run_job({'count': 3,
+                      'only_pks': [third.pk, first.pk, second.pk]})
+
+        self.assertEqual([r['pk'] for r in self.items()],
+                         [third.pk, first.pk, second.pk])
+
+    def test_only_pks_drops_a_garbage_id_and_processes_the_rest(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        versions_mock, _ = self.run_job(
+            {'count': 2, 'only_pks': ['abc', article.pk]})
+
+        versions_mock.assert_called_once()
+        self.assertEqual([r['pk'] for r in self.items()], [article.pk])
+        self.assertIn('Ungültige Artikel-ID', self.run.log)
+
+    def test_only_pks_drops_an_id_that_no_longer_exists(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        self.run_job({'count': 2, 'only_pks': [article.pk, 999999]})
+
+        self.assertEqual([r['pk'] for r in self.items()], [article.pk])
+        self.assertIn('Artikel 999999 nicht gefunden.', self.run.log)
+
+    def test_only_pks_processes_a_repeated_id_once(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        versions_mock, _ = self.run_job(
+            {'count': 2, 'only_pks': [article.pk, article.pk]})
+
+        versions_mock.assert_called_once()
+        self.assertEqual(len(self.items()), 1)
+
+    def test_only_pks_with_nothing_usable_logs_and_calls_nothing(self):
+        versions_mock, cards_mock = self.run_job(
+            {'count': 2, 'only_pks': ['abc', 999999]})
+
+        versions_mock.assert_not_called()
+        cards_mock.assert_not_called()
+        self.assertEqual(self.items(), [])
+        self.assertIn('Keine gültigen Artikel ausgewählt.', self.run.log)
+
+    def test_only_pks_ignores_the_count_and_takes_the_whole_selection(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        self.run_job({'count': 1, 'only_pks': [first.pk, second.pk]})
+
+        self.assertEqual(len(self.items()), 2)
+
+
+# ---------------------------------------------------------------------------
+# views.process_selected(): "Ausgewählte verarbeiten"
+# ---------------------------------------------------------------------------
+
+class ProcessSelectedPermissionTests(TestCase):
+    def setUp(self):
+        self.article = Article.objects.create(title='Rohartikel',
+                                              original_text='Text')
+
+    def test_a_logged_out_visitor_is_redirected_and_starts_nothing(self):
+        with fake_start_job() as start:
+            response = self.client.post('/control/process-selected/',
+                                        {'ids': [str(self.article.pk)]})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/admin/login/', response['Location'])
+        start.assert_not_called()
+
+    def test_a_normal_user_is_redirected_and_starts_nothing(self):
+        User.objects.create_user(username='lerner', password='GeheimesPasswort1')
+        self.client.login(username='lerner', password='GeheimesPasswort1')
+
+        with fake_start_job() as start:
+            response = self.client.post('/control/process-selected/',
+                                        {'ids': [str(self.article.pk)]})
+
+        self.assertEqual(response.status_code, 302)
+        start.assert_not_called()
+
+    def test_a_get_is_not_allowed(self):
+        self.client.force_login(make_staff())
+
+        with fake_start_job() as start:
+            response = self.client.get('/control/process-selected/')
+
+        self.assertEqual(response.status_code, 405)
+        start.assert_not_called()
+
+
+class ProcessSelectedTests(TestCase):
+    """
+    The view rides the delete form's `ids` checkboxes. Everything it refuses
+    is refused with a message on a page the admin is looking at, rather than
+    in a worker-thread log nobody reads.
+    """
+
+    def setUp(self):
+        self.client.force_login(make_staff())
+
+    def messages_of(self, response):
+        return [str(m) for m in response.wsgi_request._messages]
+
+    def post(self, ids, **extra):
+        return self.client.post('/control/process-selected/',
+                                dict({'ids': ids}, **extra))
+
+    def test_nothing_ticked_is_refused(self):
+        with fake_start_job() as start:
+            response = self.post([])
+
+        self.assertEqual(response.status_code, 302)
+        start.assert_not_called()
+        self.assertIn('Nichts ausgewählt.', self.messages_of(response))
+
+    def test_only_garbage_ids_count_as_nothing_ticked(self):
+        with fake_start_job() as start:
+            response = self.post(['abc', '-3', ''])
+
+        start.assert_not_called()
+        self.assertIn('Nichts ausgewählt.', self.messages_of(response))
+
+    def test_more_than_the_limit_is_refused_before_any_job_starts(self):
+        ids = [str(pk) for pk in range(1, MAX_SELECTED + 2)]
+
+        with fake_start_job() as start:
+            response = self.post(ids)
+
+        start.assert_not_called()
+        self.assertIn(f'Höchstens {MAX_SELECTED} Artikel pro Lauf — '
+                      f'{MAX_SELECTED + 1} ausgewählt.',
+                      self.messages_of(response))
+
+    def test_exactly_the_limit_is_accepted(self):
+        articles = [Article.objects.create(title=f'Artikel {n}',
+                                          original_text='Text')
+                    for n in range(MAX_SELECTED)]
+        ids = [str(a.pk) for a in articles]
+
+        with fake_start_job('Artikel verarbeiten') as start:
+            self.post(ids)
+
+        start.assert_called_once()
+        self.assertEqual(start.call_args[0][1]['count'], MAX_SELECTED)
+
+    def test_ids_that_no_longer_exist_are_refused_with_a_message(self):
+        with fake_start_job() as start:
+            response = self.post(['999998', '999999'])
+
+        start.assert_not_called()
+        self.assertIn('Keiner der ausgewählten Artikel wurde gefunden.',
+                      self.messages_of(response))
+
+    def test_a_running_job_blocks_it_with_the_runners_own_message(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+        JobRun.objects.create(job='fetch_articles', status='running')
+
+        response = self.post([str(article.pk)])
+
+        self.assertEqual(response.status_code, 302)
+        # No second JobRun row: the runner refused before creating one.
+        self.assertEqual(JobRun.objects.count(), 1)
+        self.assertIn('läuft gerade. Bitte warten.',
+                      ' '.join(self.messages_of(response)))
+
+    def test_a_real_selection_starts_the_job_with_the_ticked_pks(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        with fake_start_job('Artikel verarbeiten') as start:
+            response = self.post([str(second.pk), str(first.pk)])
+
+        self.assertEqual(response.status_code, 302)
+        start.assert_called_once()
+        self.assertEqual(start.call_args[0][0], 'process_articles')
+        self.assertEqual(start.call_args[0][1],
+                         {'count': 2, 'only_pks': [second.pk, first.pk]})
+        self.assertEqual(start.call_args[1], {'triggered_by': 'admin'})
+
+    def test_repeated_ids_are_sent_once(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        with fake_start_job('Artikel verarbeiten') as start:
+            self.post([str(article.pk), str(article.pk)])
+
+        self.assertEqual(start.call_args[0][1],
+                         {'count': 1, 'only_pks': [article.pk]})
+
+    def test_unknown_ids_are_dropped_from_the_params(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        with fake_start_job('Artikel verarbeiten') as start:
+            self.post(['999999', str(article.pk)])
+
+        self.assertEqual(start.call_args[0][1],
+                         {'count': 1, 'only_pks': [article.pk]})
+
+    def test_an_already_processed_article_is_still_sent_to_the_job(self):
+        """Skipping is the job's business, so the board can say so."""
+        done = complete_article(title='Schon fertig', is_processed=True)
+
+        with fake_start_job('Artikel verarbeiten') as start:
+            self.post([str(done.pk)])
+
+        self.assertEqual(start.call_args[0][1]['only_pks'], [done.pk])
+
+    def test_the_success_message_names_the_count(self):
+        first  = Article.objects.create(title='Eins', original_text='T1')
+        second = Article.objects.create(title='Zwei', original_text='T2')
+
+        with fake_start_job('Artikel verarbeiten'):
+            response = self.post([str(first.pk), str(second.pk)])
+
+        self.assertIn('Verarbeitung von 2 Artikeln gestartet.',
+                      self.messages_of(response))
+
+    def test_it_redirects_back_to_the_page_it_came_from(self):
+        article = Article.objects.create(title='Rohartikel', original_text='Text')
+
+        with fake_start_job('Artikel verarbeiten'):
+            response = self.post([str(article.pk)],
+                                 next='/control/?tab=articles&page=2')
+
+        self.assertEqual(response['Location'], '/control/?tab=articles&page=2')
+
+    def test_an_error_also_redirects_back(self):
+        with fake_start_job():
+            response = self.post([], next='/control/?status=waiting')
+
+        self.assertEqual(response['Location'], '/control/?status=waiting')
+
+
+# ---------------------------------------------------------------------------
+# views._board() / _latest_board(): the payload the panel and the poll share
+# ---------------------------------------------------------------------------
+
+def make_board_run(job='process_articles', status='done', items=None,
+                   minutes_ago=0):
+    """A JobRun with a fixed created_at, so -created_at ordering is certain."""
+    run = JobRun.objects.create(job=job, status=status,
+                                items=[dict(i) for i in (items or [])])
+    JobRun.objects.filter(pk=run.pk).update(
+        created_at=timezone.now() - datetime.timedelta(minutes=minutes_ago))
+    run.refresh_from_db()
+    return run
+
+
+class BoardPayloadTests(TestCase):
+    def test_no_run_means_no_board(self):
+        self.assertIsNone(_board(None))
+
+    def test_a_run_without_items_means_no_board(self):
+        self.assertIsNone(_board(make_board_run()))
+
+    def test_the_board_names_the_run_the_job_the_status_and_the_summary(self):
+        run = make_board_run(status='running',
+                             items=[board_item(pk=1, state='done'),
+                                    board_item(pk=2, state='queued')])
+
+        board = _board(run)
+
+        self.assertEqual(board['run_id'], run.pk)
+        self.assertEqual(board['job'], 'Artikel verarbeiten')
+        self.assertEqual(board['status'], 'running')
+        self.assertEqual(board['summary'], '1 fertig · 1 offen')
+        self.assertEqual(len(board['items']), 2)
+
+    def test_each_row_gains_a_label_and_a_pill_class(self):
+        run = make_board_run(items=[board_item(pk=4, title='Eins',
+                                               state='incomplete',
+                                               error='C1: Wörter')])
+
+        row = _board(run)['items'][0]
+
+        self.assertEqual(row, {
+            'pk': 4, 'title': 'Eins', 'state': 'incomplete',
+            'label': ITEM_LABELS['incomplete'], 'css': ITEM_CSS['incomplete'],
+            'step': '', 'error': 'C1: Wörter', 'retry': True,
+        })
+
+    def test_retry_is_set_only_for_failed_and_incomplete(self):
+        run = make_board_run(items=[board_item(pk=i, state=state)
+                                    for i, state in enumerate(ITEM_LABELS, 1)])
+        rows = _board(run)['items']
+
+        retryable = {row['state'] for row in rows if row['retry']}
+        self.assertEqual(retryable, {'failed', 'incomplete'})
+
+    def test_every_state_has_a_label_and_a_pill(self):
+        run = make_board_run(items=[board_item(pk=i, state=state)
+                                    for i, state in enumerate(ITEM_LABELS, 1)])
+
+        for row in _board(run)['items']:
+            self.assertEqual(row['label'], ITEM_LABELS[row['state']])
+            self.assertEqual(row['css'], ITEM_CSS[row['state']])
+
+    def test_an_unreadable_state_falls_back_to_a_neutral_pill(self):
+        run = make_board_run(items=[board_item(pk=1, state='kaputt')])
+
+        row = _board(run)['items'][0]
+
+        self.assertEqual(row['label'], 'kaputt')
+        self.assertEqual(row['css'], 'p-free')
+        self.assertFalse(row['retry'])
+
+    def test_missing_keys_become_empty_strings(self):
+        run = make_board_run(items=[{'pk': 3}])
+
+        row = _board(run)['items'][0]
+
+        self.assertEqual(row['title'], '')
+        self.assertEqual(row['state'], '')
+        self.assertEqual(row['step'], '')
+        self.assertEqual(row['error'], '')
+        self.assertEqual(row['css'], 'p-free')
+
+
+class LatestBoardTests(TestCase):
+    def test_nothing_at_all_means_no_board(self):
+        self.assertIsNone(_latest_board())
+
+    def test_a_running_processing_run_is_preferred(self):
+        make_board_run(items=[board_item(pk=1, state='done')], minutes_ago=0)
+        running = make_board_run(status='running',
+                                 items=[board_item(pk=9, state='running')],
+                                 minutes_ago=30)
+
+        board = _latest_board(running)
+
+        self.assertEqual(board['run_id'], running.pk)
+
+    def test_a_running_run_without_items_falls_back_to_the_last_board(self):
+        older = make_board_run(items=[board_item(pk=1, state='failed')],
+                               minutes_ago=30)
+        running = make_board_run(status='running', minutes_ago=0)
+
+        board = _latest_board(running)
+
+        self.assertEqual(board['run_id'], older.pk)
+
+    def test_a_running_job_of_another_kind_does_not_hide_the_board(self):
+        older   = make_board_run(items=[board_item(pk=1, state='done')],
+                                 minutes_ago=30)
+        running = make_board_run(job='fetch_articles', status='running',
+                                 minutes_ago=0)
+
+        board = _latest_board(running)
+
+        self.assertEqual(board['run_id'], older.pk)
+
+    def test_a_newer_empty_run_does_not_wipe_the_previous_board(self):
+        older = make_board_run(items=[board_item(pk=1, state='failed',
+                                                 error='429')],
+                               minutes_ago=30)
+        make_board_run(minutes_ago=1)
+
+        self.assertEqual(_latest_board()['run_id'], older.pk)
+
+    def test_a_board_older_than_the_lookback_is_let_go(self):
+        make_board_run(items=[board_item(pk=1, state='done')], minutes_ago=100)
+        for n in range(BOARD_LOOKBACK):
+            make_board_run(minutes_ago=n + 1)
+
+        self.assertIsNone(_latest_board())
+
+    def test_runs_of_other_jobs_are_ignored(self):
+        make_board_run(job='generate_grammar',
+                       items=[board_item(pk=1, state='done')], minutes_ago=0)
+
+        self.assertIsNone(_latest_board())
+
+    def test_the_newest_board_wins_among_finished_runs(self):
+        make_board_run(items=[board_item(pk=1, state='done')], minutes_ago=30)
+        newer = make_board_run(items=[board_item(pk=2, state='failed')],
+                               minutes_ago=1)
+
+        self.assertEqual(_latest_board()['run_id'], newer.pk)
+
+
+class PanelBoardContextTests(TestCase):
+    def setUp(self):
+        self.client.force_login(make_staff())
+
+    def test_the_panel_renders_the_board_before_the_first_poll(self):
+        run = make_board_run(items=[board_item(pk=1, title='Eins',
+                                               state='done'),
+                                    board_item(pk=2, title='Zwei',
+                                               state='failed', error='429')])
+
+        response = self.client.get('/control/')
+
+        board = response.context['board']
+        self.assertEqual(board['run_id'], run.pk)
+        self.assertEqual(board['summary'], '1 fertig · 1 Fehler')
+        self.assertContains(response, 'Verarbeitung')
+
+    def test_the_panel_has_no_board_when_no_run_has_items(self):
+        make_board_run()
+
+        self.assertIsNone(self.client.get('/control/').context['board'])
+
+    def test_the_panel_passes_the_selection_limit(self):
+        response = self.client.get('/control/')
+
+        self.assertEqual(response.context['max_selected'], MAX_SELECTED)
+
+    def test_the_article_list_offers_the_selected_button(self):
+        Article.objects.create(title='Rohartikel', original_text='Text')
+
+        response = self.client.get('/control/')
+
+        self.assertContains(response, '/control/process-selected/')
+        self.assertContains(response, 'Ausgewählte verarbeiten')
+
+
+class StatusBoardTests(TestCase):
+    def setUp(self):
+        self.client.force_login(make_staff())
+
+    def test_the_running_payload_carries_the_board(self):
+        run = make_board_run(status='running',
+                             items=[board_item(pk=1, title='Eins',
+                                               state='running',
+                                               step=STEPS[2]),
+                                    board_item(pk=2, title='Zwei')])
+
+        data = self.client.get('/control/status/').json()
+
+        self.assertTrue(data['running'])
+        self.assertEqual(data['board']['run_id'], run.pk)
+        self.assertEqual(data['board']['summary'], '2 offen')
+        self.assertEqual(data['board']['items'][0]['step'], STEPS[2])
+        self.assertEqual(data['board']['items'][0]['css'], ITEM_CSS['running'])
+
+    def test_the_idle_payload_carries_the_board_too(self):
+        run = make_board_run(items=[board_item(pk=1, title='Eins',
+                                               state='incomplete',
+                                               error='C1: Wörter')])
+
+        data = self.client.get('/control/status/').json()
+
+        self.assertFalse(data['running'])
+        self.assertEqual(data['board']['run_id'], run.pk)
+        self.assertIs(data['board']['items'][0]['retry'], True)
+        self.assertEqual(data['board']['items'][0]['label'],
+                         ITEM_LABELS['incomplete'])
+
+    def test_the_idle_payload_has_a_null_board_without_items(self):
+        make_board_run()
+
+        data = self.client.get('/control/status/').json()
+
+        self.assertIsNone(data['board'])
+
+    def test_status_still_requires_staff(self):
+        self.client.logout()
+
+        self.assertEqual(self.client.get('/control/status/').status_code, 302)
+
+
+# ---------------------------------------------------------------------------
+# Regression: the bulk delete form still deletes
+# ---------------------------------------------------------------------------
+
+class BulkDeleteStillWorksTests(TestCase):
+    """
+    "Ausgewählte verarbeiten" is a second submit button inside the delete
+    form, using formaction. The form's own action must keep working.
+    """
+
+    def setUp(self):
+        self.client.force_login(make_staff())
+        self.first  = Article.objects.create(title='Eins', original_text='T1')
+        self.second = Article.objects.create(title='Zwei', original_text='T2')
+
+    def test_the_article_form_still_posts_to_the_delete_url(self):
+        response = self.client.get('/control/')
+
+        self.assertContains(response, 'action="/control/delete/"')
+
+    def test_posting_ids_still_reaches_the_confirm_page(self):
+        response = self.client.post('/control/delete/', {
+            'kind': 'articles',
+            'ids': [str(self.first.pk), str(self.second.pk)],
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'control/confirm_delete.html')
+        self.assertEqual(response.context['count'], 2)
+        self.assertEqual(Article.objects.count(), 2)   # nothing gone yet
+
+    def test_a_confirmed_post_still_deletes(self):
+        response = self.client.post('/control/delete/', {
+            'kind': 'articles',
+            'ids': [str(self.first.pk)],
+            'confirmed': '1',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(list(Article.objects.values_list('pk', flat=True)),
+                         [self.second.pk])
+
+    def test_deleting_nothing_is_still_refused(self):
+        response = self.client.post('/control/delete/', {'kind': 'articles'})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('Nichts ausgewählt.',
+                      [str(m) for m in response.wsgi_request._messages])
+        self.assertEqual(Article.objects.count(), 2)
+
+    def test_the_jetzt_button_in_the_same_form_still_works(self):
+        with fake_start_job('Artikel verarbeiten') as start:
+            response = self.client.post('/control/process-one/',
+                                        {'pk': str(self.first.pk)})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(start.call_args[0][1],
+                         {'count': 1, 'only_pk': self.first.pk})
